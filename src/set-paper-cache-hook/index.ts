@@ -5,12 +5,7 @@ import type {
     HookExtensionContext,
     RegisterFunctions,
 } from "@directus/extensions";
-import type {
-    Accountability,
-    Item as AnyItem,
-    Query,
-    SchemaOverview,
-} from "@directus/types";
+import type { Query } from "@directus/types";
 
 const redis = new IORedis(process.env.REDIS!, {
     maxRetriesPerRequest: null, // 适用于 Redis 连接本身
@@ -67,47 +62,108 @@ const comprehensivePaperFields = [
 export default defineHook(
     (
         { filter, action, init, schedule }: RegisterFunctions,
-        { services, database, getSchema, logger }: HookExtensionContext
+        hookContext: HookExtensionContext
     ) => {
+        const { services, getSchema, logger } = hookContext;
         const { ItemsService } = services;
 
-        // 共享的函数，用于获取试卷数据
-        const fetchPaper = async (payload: any, meta: any, context: any) => {
-            console.log("fetchPaper 执行中");
+        // 共享的函数，用于获取并缓存试卷数据
+        const fetchAndCachePapers = async () => {
+            logger.info("Fetching and caching papers started...");
+            try {
+                const currentSchema = await getSchema(); // 获取最新的 schema
+                // 使用管理员权限 (省略 accountability) 来获取所有 papers
+                const papersService = new ItemsService("papers", {
+                    schema: currentSchema,
+                    // accountability: null, // 如果只需要公共数据，则使用 null
+                });
 
-            const { accountability, schema } = context;
-            console.log("context", context);
-
-            const serviceOptions = { schema, accountability };
-
-            // 创建必要的服务
-            const papersService = new ItemsService("papers", serviceOptions);
-
-            setItemsToCache(
-                redis,
-                "papers_full_data", // 新的缓存键
-                async () =>
-                    await papersService.readByQuery({
-                        fields: comprehensivePaperFields,
-                        limit: -1,
-                    } as Query),
-                "id", // 对象中用作唯一ID的字段名
-                60 // 缓存时间，例如1小时 (3600秒)
-            );
+                // 调用你的 redisUtils 中的函数来处理缓存
+                // 注意：setItemsToCache 应该是一个 async 函数，这里使用 await
+                await setItemsToCache(
+                    redis,
+                    "papers", // Redis 命名空间，键将是 "papers:id"
+                    async () =>
+                        await papersService.readByQuery({
+                            fields: comprehensivePaperFields,
+                            limit: -1, // 获取所有项目
+                        } as Query),
+                    "id", // 对象中用作唯一ID的字段名
+                    3600 // 缓存时间 (TTL)，例如1小时 (3600秒)。你可以根据需要调整。
+                );
+                logger.info(
+                    "Fetching and caching papers completed successfully."
+                );
+            } catch (error) {
+                logger.error(
+                    error,
+                    "Error occurred during fetchAndCachePapers:"
+                );
+            }
         };
 
-        filter("items.create", () => {
-            console.log("Creating Item!");
+        // 定时任务，例如每小时执行一次 (你可以调整 cron 表达式)
+        // '0 * * * *' 表示每小时的第0分钟执行
+        // '*/1 * * * *' 表示每1分钟执行一次，对于全量刷新可能过于频繁，请谨慎设置
+        schedule("*/5 * * * *", async () => {
+            // 例如，改为每5分钟
+            logger.info("Scheduled paper cache refresh triggered.");
+            await fetchAndCachePapers();
         });
 
-        schedule("*/1 * * * *", () => {
-            console.log("1 minutes have passed.");
-            fetchPaper(null, null, context);
-            console.log("fetchPaper 执行完毕");
+        // 应用初始化时预热缓存 (例如 'app.after' 表示 Directus 应用完全加载后)
+        // 参考文档: https://docs.directus.io/guides/extensions/api-extensions/hooks.html#init-events
+        init("app.after", async ({ app }) => {
+            // app 参数可用，但这里我们不需要它
+            logger.info(
+                "Initial paper cache warming triggered (on app.after)."
+            );
+            await fetchAndCachePapers();
         });
 
-        action("items.create", () => {
-            console.log("Item created!");
+        // 你可以根据需要添加其他的 filter 或 action 钩子
+        // 例如，当 papers 集合中的数据发生变化时，精确更新或删除相关缓存
+        action("papers.items.create", async (meta, context) => {
+            // meta.key or meta.keys 包含被创建/更新/删除的项的ID
+            // context 包含 services, getSchema 等
+            logger.info(
+                `Paper created/updated/deleted (event: ${
+                    meta.event
+                }). Invalidating/updating cache for key(s): ${
+                    meta.key || meta.keys
+                }`
+            );
+            // 这里可以调用一个更精确的函数来更新单个 paper 的缓存，或者简单地重新运行全量缓存
+            await fetchAndCachePapers(); // 简单起见，重新获取全部。或者实现一个 updateSinglePaperInCache(meta.key)
         });
+        action("papers.items.update", async (meta, context) => {
+            logger.info(
+                `Paper created/updated/deleted (event: ${
+                    meta.event
+                }). Invalidating/updating cache for key(s): ${
+                    meta.key || meta.keys
+                }`
+            );
+            await fetchAndCachePapers();
+        });
+        action("papers.items.delete", async (meta, context) => {
+            logger.info(
+                `Paper created/updated/deleted (event: ${
+                    meta.event
+                }). Invalidating/updating cache for key(s): ${
+                    meta.key || meta.keys
+                }`
+            );
+            // 对于删除操作，你可能需要从 Redis 中明确删除对应的键
+            // await deleteItemsFromCache(redis, "papers", meta.keys);
+            // 或者，如果你的 setItemsToCache 在获取不到数据时会清除旧缓存，那也可以接受
+            await fetchAndCachePapers(); // 重新获取，间接删除了不存在的
+        });
+
+        // 示例 filter (如果你需要)
+        // filter('items.create', (payload, meta, context) => {
+        //     logger.info('About to create item in papers collection:', payload);
+        //     return payload; // 必须返回 payload
+        // });
     }
 );
