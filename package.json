@@ -28,6 +28,26 @@
 				"type": "hook",
 				"name": "course-bookmark-hook",
 				"source": "src/course-bookmark-hook/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "exercise-distribute-papers-hook",
+				"source": "src/exercise-distribute-papers-hook/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "paper-section-question-group-hook",
+				"source": "src/paper-section-question-group-hook/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "question-results-submit-queue-endpoint",
+				"source": "src/question-results-submit-queue-endpoint/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "student-to-user-hook",
+				"source": "src/student-to-user-hook/index.ts"
 			}
 		],
 		"host": "^10.10.0"
@@ -43,5 +63,11 @@
 		"@directus/extensions-sdk": "13.1.0",
 		"@types/node": "^22.15.21",
 		"typescript": "^5.8.3"
+	},
+	"dependencies": {
+		"@directus/extensions": "^3.0.5",
+		"@directus/types": "^13.1.1",
+		"bullmq": "^5.53.0",
+		"ioredis": "^5.6.1"
 	}
 }
