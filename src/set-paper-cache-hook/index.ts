@@ -33,14 +33,14 @@ const comprehensivePaperFields = [
     "paper_sections.questions.paper_sections_id",
     // 章节中的问题 (通过 paper_sections_questions 关联)
     "paper_sections.questions.questions_id.id",
-    // "paper_sections.questions.questions_id.stem",
-    // 题目类型，在详细题型里面已经有了，这里不再重复。
+    "paper_sections.questions.questions_id.stem",
+    // 题目类型，在详细题型里面已经有了。但是目前前端代码还是从这里取的。
     "paper_sections.questions.questions_id.type",
     // "paper_sections.questions.questions_id.analysis", 
     // 题目解析内容较多，不要放在一起获取。
     // 可以改成和question_result一样，另外按需获取。
     "paper_sections.questions.questions_id.q_mc_single.id",
-    "paper_sections.questions.questions_id.q_mc_single.stem",
+    // "paper_sections.questions.questions_id.q_mc_single.stem",
     "paper_sections.questions.questions_id.q_mc_single.option_a",
     "paper_sections.questions.questions_id.q_mc_single.option_b",
     "paper_sections.questions.questions_id.q_mc_single.option_c",
@@ -48,7 +48,7 @@ const comprehensivePaperFields = [
     "paper_sections.questions.questions_id.q_mc_single.option_e",
     "paper_sections.questions.questions_id.q_mc_single.option_f",
     "paper_sections.questions.questions_id.q_mc_multi.id",
-    "paper_sections.questions.questions_id.q_mc_multi.stem",
+    // "paper_sections.questions.questions_id.q_mc_multi.stem",
     "paper_sections.questions.questions_id.q_mc_multi.option_a",
     "paper_sections.questions.questions_id.q_mc_multi.option_b",
     "paper_sections.questions.questions_id.q_mc_multi.option_c",
@@ -56,11 +56,11 @@ const comprehensivePaperFields = [
     "paper_sections.questions.questions_id.q_mc_multi.option_e",
     "paper_sections.questions.questions_id.q_mc_multi.option_f",
     "paper_sections.questions.questions_id.q_mc_binary.id",
-    "paper_sections.questions.questions_id.q_mc_binary.stem",
+    // "paper_sections.questions.questions_id.q_mc_binary.stem",
     "paper_sections.questions.questions_id.q_mc_binary.option_a",
     "paper_sections.questions.questions_id.q_mc_binary.option_b",
     "paper_sections.questions.questions_id.q_mc_flexible.id",
-    "paper_sections.questions.questions_id.q_mc_flexible.stem",
+    // "paper_sections.questions.questions_id.q_mc_flexible.stem",
     "paper_sections.questions.questions_id.q_mc_flexible.option_a",
     "paper_sections.questions.questions_id.q_mc_flexible.option_b",
     "paper_sections.questions.questions_id.q_mc_flexible.option_c",
