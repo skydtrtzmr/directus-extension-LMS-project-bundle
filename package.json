@@ -1,0 +1,47 @@
+{
+	"name": "directus-extension-LMS-project-bundle",
+	"description": "Please enter a description for your extension",
+	"icon": "extension",
+	"version": "1.0.0",
+	"keywords": [
+		"directus",
+		"directus-extension",
+		"directus-extension-bundle"
+	],
+	"type": "module",
+	"files": [
+		"dist"
+	],
+	"directus:extension": {
+		"type": "bundle",
+		"path": {
+			"app": "dist/app.js",
+			"api": "dist/api.js"
+		},
+		"entries": [
+			{
+				"type": "hook",
+				"name": "automatic-grading-hook",
+				"source": "src/automatic-grading-hook/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "course-bookmark-hook",
+				"source": "src/course-bookmark-hook/index.ts"
+			}
+		],
+		"host": "^10.10.0"
+	},
+	"scripts": {
+		"build": "directus-extension build",
+		"dev": "directus-extension build -w --no-minify",
+		"link": "directus-extension link",
+		"validate": "directus-extension validate",
+		"add": "directus-extension add"
+	},
+	"devDependencies": {
+		"@directus/extensions-sdk": "13.1.0",
+		"@types/node": "^22.15.21",
+		"typescript": "^5.8.3"
+	}
+}
