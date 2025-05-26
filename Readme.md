@@ -17,7 +17,7 @@ npx create-directus-extension@latest
 ## 新增子扩展
 
 ```bash
-pnpm add
+pnpm run add
 ```
 
 ## 构建
