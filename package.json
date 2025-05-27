@@ -63,6 +63,11 @@
 				"type": "hook",
 				"name": "set-practice-session-cache-hook",
 				"source": "src/set-practice-session-cache-hook/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "fetch-practice-session-cache-endpoint",
+				"source": "src/fetch-practice-session-cache-endpoint/index.ts"
 			}
 		],
 		"host": "^10.10.0"
