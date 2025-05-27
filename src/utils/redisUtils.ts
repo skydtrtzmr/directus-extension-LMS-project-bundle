@@ -93,20 +93,128 @@ export async function setHashCache(
     fetchFunction: () => Promise<any[]>, // 注意这里一定返回的是个数组，因为是 Hash 列表
     ttl: number = 3600
 ): Promise<void> {
-    // https://blog.51cto.com/u_16213418/11828350
-
     const data = await fetchFunction();
-    // console.log("update cache", key, data);
-
-    // await redis.set(key, JSON.stringify(data), "EX", ttl); // 设置过期时间
-
-    // 将每个章节对象存储为哈希字段，字段名为章节的id，值为章节对象
+    const pipeline = redis.pipeline();
+    let itemsPrepared = 0;
     for (const item of data) {
-        // 假设每个章节对象有 `id` 字段
-        await redis.hset(key, item.id.toString(), JSON.stringify(item));
+        if (item && typeof item.id !== 'undefined') {
+            pipeline.hset(key, item.id.toString(), JSON.stringify(item));
+            itemsPrepared++;
+        } else {
+            console.warn(`[setHashCache] Item for key '${key}' is missing 'id' field or item is null/undefined. Skipping item:`, item);
+        }
     }
-    redis.expire(key, ttl).then((didSetExpire) => {
-        // console.log("Key has an expiration time set:", didSetExpire);
-    }); // 设置过期时间
-    // console.log("hset");
+
+    if (itemsPrepared > 0) {
+        pipeline.expire(key, ttl);
+        try {
+            await pipeline.exec();
+            console.log(`[setHashCache] Successfully cached ${itemsPrepared} items into Hash '${key}' with TTL ${ttl}s.`);
+        } catch (error) {
+            console.error(`[setHashCache] Error executing pipeline for Hash '${key}'. Items attempted: ${itemsPrepared}. Error:`, error);
+        }
+    } else {
+        console.log(`[setHashCache] No items prepared for Hash '${key}'. Cache not set/updated.`);
+        // Optionally, delete the key if no items are to be cached, to clear old data.
+        // await redis.del(key);
+    }
+}
+
+// NEW FUNCTION for two-level nested caching
+/**
+ * Caches a two-level nested structure into multiple Redis Hashes.
+ * Fetches a list of parent items. For each parent, it fetches its associated child items
+ * and stores them in a dedicated Redis Hash.
+ *
+ * @param redis - The IORedis client instance.
+ * @param parentNamespace - Namespace prefix for the Redis Hash keys (e.g., "practice_session_qresults").
+ * @param fetchParentItems - Async function to fetch the list of parent items.
+ * @param parentIdField - The field name in parent items used to form the unique part of the Redis Hash key.
+ * @param fetchChildItemsForParent - Async function that takes a parent item and returns its list of child items.
+ * @param childIdField - The field name in child items used as the field key within the Redis Hash.
+ * @param ttl - Time-to-live in seconds for each individual Redis Hash.
+ */
+export async function cacheNestedListToRedisHashes<
+    TParentItem extends { [key: string]: any },
+    TChildItem extends { [key: string]: any }
+>(
+    redis: Redis,
+    parentNamespace: string,
+    fetchParentItems: () => Promise<TParentItem[]>,
+    parentIdField: keyof TParentItem | string, // Allows string for dynamic access
+    fetchChildItemsForParent: (parentItem: TParentItem) => Promise<TChildItem[]>,
+    childIdField: keyof TChildItem | string, // Allows string for dynamic access
+    ttl: number = 3600
+): Promise<void> {
+    console.log(`[NestedCache] Starting process for namespace '${parentNamespace}'.`);
+    let parentItems: TParentItem[];
+    try {
+        parentItems = await fetchParentItems();
+        if (!parentItems || parentItems.length === 0) {
+            console.log(`[NestedCache] Namespace '${parentNamespace}': No parent items fetched. Exiting.`);
+            return;
+        }
+        console.log(`[NestedCache] Namespace '${parentNamespace}': Fetched ${parentItems.length} parent items.`);
+    } catch (error) {
+        console.error(`[NestedCache] Namespace '${parentNamespace}': Failed to fetch parent items. Error:`, error);
+        return;
+    }
+
+    for (const parentItem of parentItems) {
+        const parentIdValue = parentItem[parentIdField as string];
+        if (parentIdValue === undefined || parentIdValue === null || parentIdValue.toString().trim() === "") {
+            console.warn(`[NestedCache] Namespace '${parentNamespace}': Parent item is missing ID field '${parentIdField as string}' or ID is null/empty. Skipping parent:`, parentItem);
+            continue;
+        }
+
+        const redisHashKey = `${parentNamespace}:${parentIdValue.toString()}`;
+        console.log(`[NestedCache] Processing parent. Hash key: '${redisHashKey}'.`);
+
+        try {
+            const childItems = await fetchChildItemsForParent(parentItem);
+
+            if (!childItems || childItems.length === 0) {
+                console.log(`[NestedCache] Hash Key '${redisHashKey}': No child items fetched. Clearing existing hash (if any).`);
+                // If no children, we might want to delete any existing hash to ensure freshness
+                await redis.del(redisHashKey); // Clear out old data for this specific hash
+                continue; // Move to the next parent item
+            }
+
+            console.log(`[NestedCache] Hash Key '${redisHashKey}': Fetched ${childItems.length} child items. Preparing pipeline.`);
+            const pipeline = redis.pipeline();
+            let itemsPreparedForThisHash = 0;
+
+            // Optional: Delete the old hash key before populating, to ensure a clean slate for these children
+            // pipeline.del(redisHashKey); 
+
+            for (const childItem of childItems) {
+                const childIdValue = childItem[childIdField as string];
+                if (childIdValue === undefined || childIdValue === null || childIdValue.toString().trim() === "") {
+                    console.warn(`[NestedCache] Hash Key '${redisHashKey}': Child item is missing ID field '${childIdField as string}' or ID is null/empty. Skipping child:`, JSON.stringify(childItem).substring(0,100) + "...");
+                    continue;
+                }
+                pipeline.hset(redisHashKey, childIdValue.toString(), JSON.stringify(childItem));
+                itemsPreparedForThisHash++;
+            }
+
+            if (itemsPreparedForThisHash > 0) {
+                pipeline.expire(redisHashKey, ttl);
+                await pipeline.exec();
+                console.log(`[NestedCache] Hash Key '${redisHashKey}': Successfully cached ${itemsPreparedForThisHash} child items with TTL ${ttl}s.`);
+            } else {
+                 console.log(`[NestedCache] Hash Key '${redisHashKey}': No child items were prepared for caching (all might have been skipped).`);
+                 // If we didn't add a del to the pipeline earlier, and no items were prepared, 
+                 // we might still want to ensure an empty hash or delete it.
+                 // For simplicity here, if no items are prepared, no pipeline.exec() is called for HSETs.
+                 // Consider if an empty hash should explicitly be set or key deleted if all children are invalid.
+                 // If pipeline.del(redisHashKey) was the first command in pipeline, it would have executed if itemsPrepared >0.
+                 // If 0 items, we might want redis.del(redisHashKey) explicitly if fetch was successful but yielded no valid children.
+            }
+
+        } catch (error) {
+            console.error(`[NestedCache] Hash Key '${redisHashKey}': Failed to fetch or cache child items. Error:`, error);
+            // Continue to the next parent item
+        }
+    }
+    console.log(`[NestedCache] Finished processing for namespace '${parentNamespace}'.`);
 }
