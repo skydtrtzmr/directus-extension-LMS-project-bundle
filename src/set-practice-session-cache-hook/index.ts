@@ -1,6 +1,9 @@
 import { defineHook } from "@directus/extensions-sdk";
 import IORedis from "ioredis";
-import { setItemsToCache } from "../utils/redisUtils";
+import {
+    setItemsToCache,
+    cacheNestedListToRedisHashes,
+} from "../utils/redisUtils";
 import type {
     HookExtensionContext,
     RegisterFunctions,
@@ -32,58 +35,77 @@ export default defineHook(
         const { services, getSchema, logger } = hookContext;
         const { ItemsService } = services;
 
-        // 共享的函数，用于获取并缓存试卷数据
-        const fetchAndCachePracticeSessions = async () => {
-            logger.info("Fetching and caching practice sessions question results started...");
-            try {
-                const currentSchema = await getSchema(); // 获取最新的 schema
-                // 使用管理员权限 (省略 accountability) 来获取所有 practice_sessions
-                const practice_sessionsService = new ItemsService("practice_sessions", {
-                    schema: currentSchema,
-                    // accountability: null, // 如果只需要公共数据，则使用 null
-                });
+        const fetchAndCachePracticeSessionResults = async () => {
+            logger.info(
+                "Fetching and caching all practice sessions' question results started..."
+            );
 
-                // 调用你的 redisUtils 中的函数来处理缓存
-                // 注意：setItemsToCache 应该是一个 async 函数，这里使用 await
-                await setItemsToCache(
-                    redis,
-                    "practice_sessions-question_results", // Redis 命名空间，键将是 "practice_sessions-question_results:id"
-                    async () =>
-                        await practice_sessionsService.readByQuery({
-                            fields: comprehensivePracticeSessionFields,
-                            limit: -1, // 获取所有项目
-                        } as Query),
-                    "id", // 对象中用作唯一ID的字段名
-                    3600 // 缓存时间 (TTL)，例如1小时 (3600秒)。你可以根据需要调整。
-                );
-                logger.info(
-                    "Fetching and caching practice_sessions completed successfully."
-                );
-            } catch (error) {
-                logger.error(
-                    error,
-                    "Error occurred during fetchAndCachePracticeSessions:"
-                );
-            }
+            await cacheNestedListToRedisHashes(
+                redis,
+                "practice_session_qresults", // parentNamespace
+                async () => {
+                    // fetchParentItems
+                    const practiceSessionsService = new ItemsService(
+                        "practice_sessions",
+                        { schema: await getSchema() }
+                    );
+                    return await practiceSessionsService.readByQuery({
+                        fields: ["id"], // Only need the ID of the parent session here
+                        limit: -1,
+                    });
+                },
+                "id", // parentIdField (field in practice_session item for its ID)
+                async (sessionItem) => {
+                    // fetchChildItemsForParent
+                    // sessionItem is one practice_session object, e.g., { id: 'some_session_id' }
+                    const questionResultsService = new ItemsService(
+                        "question_results",
+                        { schema: await getSchema() }
+                    );
+                    return await questionResultsService.readByQuery({
+                        filter: {
+                            practice_session_id: { _eq: sessionItem.id }, // Filter children by parent ID
+                        },
+                        fields: [
+                            "id",
+                            "practice_session_id",
+                            "question_in_paper_id",
+                            "question_type",
+                            "point_value",
+                            "score",
+                            "submit_ans_select_radio",
+                            "submit_ans_select_multiple_checkbox",
+                            "is_flagged",
+                        ],
+                        limit: -1,
+                    });
+                },
+                "id", // childIdField (field in question_result item for its ID, to be used as Hash Field)
+                3600 // ttl
+            );
+            logger.info(
+                "Fetching and caching all practice sessions' question results completed."
+            );
         };
 
         // 定时任务，例如每小时执行一次 (你可以调整 cron 表达式)
         // '0 * * * *' 表示每小时的第0分钟执行
         // '*/1 * * * *' 表示每1分钟执行一次，对于全量刷新可能过于频繁，请谨慎设置
-        schedule("*/5 * * * *", async () => {
-            // 例如，改为每5分钟
-            logger.info("Scheduled practice_session cache refresh triggered.");
-            await fetchAndCachePracticeSessions();
+        schedule("*/15 * * * *", async () => {
+            // Example: every 15 minutes
+            logger.info(
+                "Scheduled practice_session QResults cache refresh triggered."
+            );
+            await fetchAndCachePracticeSessionResults();
         });
 
         // 应用初始化时预热缓存 (例如 'app.after' 表示 Directus 应用完全加载后)
         // 参考文档: https://docs.directus.io/guides/extensions/api-extensions/hooks.html#init-events
-        init("app.after", async ({ app }) => {
-            // app 参数可用，但这里我们不需要它
+        init("app.after", async () => {
             logger.info(
-                "Initial practice_session cache warming triggered (on app.after)."
+                "Initial practice_session QResults cache warming triggered."
             );
-            await fetchAndCachePracticeSessions();
+            await fetchAndCachePracticeSessionResults();
         });
 
         // 对于更新触发的，需要另外写，因为这里的是拉去所有练习回话的答题结果。
