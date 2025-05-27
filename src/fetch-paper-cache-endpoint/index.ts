@@ -31,6 +31,7 @@ export default defineEndpoint((router, context) => {
     });
 
     // GET /your-extension-route/papers/:id (根据 ID 获取单个 paper)
+    // 【备注】Directus 的 API 扩展是基于 Express.js 的路由构建的，因此完全支持动态路由参数。
     router.get('/papers/:id', async (req, res) => {
         const paperId = req.params.id;
 

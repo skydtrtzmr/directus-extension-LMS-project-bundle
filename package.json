@@ -58,6 +58,11 @@
 				"type": "hook",
 				"name": "set-paper-cache-hook",
 				"source": "src/set-paper-cache-hook/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "set-practice-session-cache-hook",
+				"source": "src/set-practice-session-cache-hook/index.ts"
 			}
 		],
 		"host": "^10.10.0"

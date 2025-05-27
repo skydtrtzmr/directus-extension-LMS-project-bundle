@@ -85,3 +85,28 @@ export async function setItemsToCache(
         console.error(`[Cache] Namespace '${namespace}': Critical error executing Redis pipeline. ${itemsPreparedForCache} items were attempted. Error:`, error);
     }
 }
+
+// 通用的设置hash缓存的方法，将列表中的每个对象作为独立的键值对存入Redis。
+export async function setHashCache(
+    redis: Redis, // 传入一个ioredis实例
+    key: string,
+    fetchFunction: () => Promise<any[]>, // 注意这里一定返回的是个数组，因为是 Hash 列表
+    ttl: number = 3600
+): Promise<void> {
+    // https://blog.51cto.com/u_16213418/11828350
+
+    const data = await fetchFunction();
+    // console.log("update cache", key, data);
+
+    // await redis.set(key, JSON.stringify(data), "EX", ttl); // 设置过期时间
+
+    // 将每个章节对象存储为哈希字段，字段名为章节的id，值为章节对象
+    for (const item of data) {
+        // 假设每个章节对象有 `id` 字段
+        await redis.hset(key, item.id.toString(), JSON.stringify(item));
+    }
+    redis.expire(key, ttl).then((didSetExpire) => {
+        // console.log("Key has an expiration time set:", didSetExpire);
+    }); // 设置过期时间
+    // console.log("hset");
+}
