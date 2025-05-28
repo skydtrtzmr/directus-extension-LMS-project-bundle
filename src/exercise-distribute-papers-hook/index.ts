@@ -107,7 +107,8 @@ export default defineHook(({ filter }, { services, database, logger }) => {
 					// 创建练习会话
 					const practiceSessionId = await practiceSessionsService.createOne({
 						exercises_students_id: student.id
-					}, { emitEvents: false, trx });
+					}, { emitEvents: true, trx });
+					// [2025-05-28] 这里需要emit事件，因为practice_sessions.items.create钩子会根据practice_sessions的id来更新缓存。
 					
 					// 批量创建答题记录
 					const questionResultsBatch = questions.map((question: any) => ({

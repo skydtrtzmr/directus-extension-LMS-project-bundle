@@ -1,32 +1,17 @@
 // set-practice-session-cache-hook/index.ts
 import { defineHook } from "@directus/extensions-sdk";
 import IORedis from "ioredis";
-import {
-    setItemsToCache,
-    cacheNestedListToRedisHashes,
-} from "../utils/redisUtils";
+import { cacheNestedListToRedisHashes } from "../utils/redisUtils";
 import type {
     HookExtensionContext,
     RegisterFunctions,
 } from "@directus/extensions";
-import type { Query } from "@directus/types";
 
 const redis = new IORedis(process.env.REDIS!, {
     maxRetriesPerRequest: null, // 适用于 Redis 连接本身
 });
 
 // 用于获取练习回话的答题结果
-const comprehensivePracticeSessionFields = [
-    "id",
-    "question_results.practice_session_id",
-    "question_results.question_in_paper_id",
-    "question_results.question_type",
-    "question_results.point_value",
-    "question_results.score",
-    "question_results.submit_ans_select_radio",
-    "question_results.submit_ans_select_multiple_checkbox",
-    "question_results.is_flagged",
-];
 
 export default defineHook(
     (
@@ -105,6 +90,14 @@ export default defineHook(
         init("app.after", async () => {
             logger.info(
                 "Initial practice_session QResults cache warming triggered."
+            );
+            await fetchAndCachePracticeSessionResults();
+        });
+
+        // 注意，如果是用扩展创建的practice_sessions，需要专门写上emit才能触发这个钩子。
+        action("practice_sessions.items.create", async (meta, context) => {
+            logger.info(
+                "Practice session created, triggering cache refresh."
             );
             await fetchAndCachePracticeSessionResults();
         });
