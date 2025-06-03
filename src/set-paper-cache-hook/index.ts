@@ -131,7 +131,7 @@ export default defineHook(
         // 定时任务，例如每小时执行一次 (你可以调整 cron 表达式)
         // '0 * * * *' 表示每小时的第0分钟执行
         // '*/1 * * * *' 表示每1分钟执行一次，对于全量刷新可能过于频繁，请谨慎设置
-        schedule("*/15 * * * *", async () => {
+        schedule("*/30 * * * *", async () => {
             // 例如，改为每15分钟
             logger.info("Scheduled paper cache refresh triggered.");
             await fetchAndCachePapers();

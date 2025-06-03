@@ -94,13 +94,14 @@ export default defineHook(
         // 定时任务，例如每小时执行一次 (你可以调整 cron 表达式)
         // '0 * * * *' 表示每小时的第0分钟执行
         // '*/1 * * * *' 表示每1分钟执行一次，对于全量刷新可能过于频繁，请谨慎设置
-        // schedule("*/15 * * * *", async () => {
-        //     // Example: every 15 minutes
-        //     logger.info(
-        //         "Scheduled practice_session QResults cache refresh triggered."
-        //     );
-        //     await fetchAndCachePracticeSessionResults();
-        // });
+        // 注意这个是有过期时间的，所以如果你不全量更新的话，就一定会隔段时间没数据了。
+        schedule("*/30 * * * *", async () => {
+            // Example: every 15 minutes
+            logger.info(
+                "Scheduled practice_session QResults cache refresh triggered."
+            );
+            await fetchAndCachePracticeSessionResults();
+        });
 
         // 应用初始化时预热缓存 (例如 'app.after' 表示 Directus 应用完全加载后)
         // 参考文档: https://docs.directus.io/guides/extensions/api-extensions/hooks.html#init-events
