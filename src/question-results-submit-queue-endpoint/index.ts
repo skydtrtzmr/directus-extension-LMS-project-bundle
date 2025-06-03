@@ -117,23 +117,32 @@ export default defineEndpoint({
 
             // --- 开始：直接写入 Redis 缓存 ---
             try {
-                const questionResultItem = data.item;
-                const questionResultId = data.id; // This is the ID of the question_result item itself
+                const questionResultItem = data.item; // This is the object with fields to update/set
+                const questionResultId = data.id;     // ID of the question_result item itself
                 const practiceSessionId = questionResultItem.practice_session_id;
 
-                if (practiceSessionId) {
-                    const redisHashKey = `practice_session_qresults:${practiceSessionId}`;
+                if (practiceSessionId && questionResultId) {
+                    const childRedisKey = `practice_session:${practiceSessionId}:qresult:${questionResultId.toString()}`;
                     
-                    // 将完整的 questionResultItem 存入 Hash
-                    // data.id 是 question_result 的 ID，作为 Hash 中的 field
-                    // data.item 是 question_result 的完整对象，作为 Hash 中 field 对应的 value
-                    await connection.hset(redisHashKey, questionResultId.toString(), JSON.stringify(questionResultItem));
-                    // 确保该 Hash 键有 TTL
-                    await connection.expire(redisHashKey, DEFAULT_CACHE_TTL);
+                    // 将 questionResultItem 对象转换为 { [key: string]: string } 形式以用于 hmset
+                    // 确保所有值都是字符串，null 或 undefined 的值转换为空字符串
+                    const itemToCache: { [key: string]: string } = {};
+                    for (const key in questionResultItem) {
+                        if (Object.prototype.hasOwnProperty.call(questionResultItem, key)) {
+                            const value = questionResultItem[key];
+                            itemToCache[key] = (value === null || value === undefined) ? "" : String(value);
+                        }
+                    }
 
-                    logger.info(`Endpoint: Question result ${questionResultId} for session ${practiceSessionId} directly written/updated in Redis cache (Key: ${redisHashKey}).`);
+                    if (Object.keys(itemToCache).length > 0) {
+                        await connection.hmset(childRedisKey, itemToCache);
+                        await connection.expire(childRedisKey, DEFAULT_CACHE_TTL);
+                        logger.info(`Endpoint: Question result ${questionResultId} for session ${practiceSessionId} directly written/updated in Redis cache (Key: ${childRedisKey}). Fields updated: ${Object.keys(itemToCache).join(', ')}`);
+                    } else {
+                        logger.warn(`Endpoint: /question_result payload for ID ${questionResultId}, session ${practiceSessionId} resulted in an empty item map. Skipping direct Redis cache update. Data:`, data);
+                    }
                 } else {
-                    logger.warn(`Endpoint: /question_result payload for ID ${questionResultId} is missing practice_session_id in item data. Skipping direct Redis cache update. Data:`, data);
+                    logger.warn(`Endpoint: /question_result payload for ID ${data.id} is missing practice_session_id in item data or questionResultId is missing. Skipping direct Redis cache update. Data:`, data);
                 }
             } catch (cacheError) {
                 logger.error(`Endpoint: Failed to write to Redis cache for questionId ${data.id}. Error:`, cacheError);

@@ -218,3 +218,103 @@ export async function cacheNestedListToRedisHashes<
     }
     console.log(`[NestedCache] Finished processing for namespace '${parentNamespace}'.`);
 }
+
+// [2024-05-26] 新增函数：将嵌套数据列表的子项缓存为独立的Redis Hash
+// 每个子项都拥有自己的Redis键，格式为 parentNamespace:parentId:childNamespace:childId
+// 这样做的好处是，更新单个子项时，只需要修改对应的Hash，而不需要重写整个父项的子项列表
+export async function cacheNestedObjectsToIndividualRedisHashes<
+    TParentItem extends { [key: string]: any },
+    TChildItem extends { [key: string]: any }
+>(
+    redis: Redis,
+    parentNamespace: string, // 父项的命名空间, e.g., "practice_session"
+    parentItems: TParentItem[], // 父项列表
+    parentIdField: keyof TParentItem | string, // 父项ID字段名
+    childListName: keyof TParentItem | string, // 父项中子项列表的字段名
+    childNamespace: string, // 子项的命名空间, e.g., "qresult" 
+    childIdField: keyof TChildItem | string, // 子项ID字段名
+    ttlSeconds: number = 3600, // 每个子项Hash的过期时间 (秒)
+): Promise<void> {
+    console.log(`[IndividualNestedCache] Starting process for parent namespace '${parentNamespace}', child namespace '${childNamespace}'. Caching ${parentItems.length} parent items.`);
+
+    for (const parentItem of parentItems) {
+        const parentId = parentItem[parentIdField as string];
+        if (parentId === undefined || parentId === null || parentId.toString().trim() === "") {
+            console.warn(`[IndividualNestedCache] Parent item in namespace '${parentNamespace}' is missing ID field '${parentIdField as string}' or ID is null/empty. Skipping. Parent:`, parentItem);
+            continue;
+        }
+
+        const childItems = parentItem[childListName as string] as TChildItem[];
+
+        // 1. 清理该父项之前的所有子项缓存 (如果存在)
+        const oldChildKeysPattern = `${parentNamespace}:${parentId}:${childNamespace}:*`;
+        try {
+            const keysToDelete = await redis.keys(oldChildKeysPattern);
+            if (keysToDelete && keysToDelete.length > 0) {
+                console.log(`[IndividualNestedCache] Parent '${parentId}': Found ${keysToDelete.length} old child keys matching '${oldChildKeysPattern}'. Deleting...`);
+                await redis.del(keysToDelete); // 使用 redis.del([...keysToDelete]) 如果 keys 是数组
+            }
+        } catch (error) {
+            console.error(`[IndividualNestedCache] Parent '${parentId}': Error searching or deleting old child keys matching '${oldChildKeysPattern}'. Error:`, error);
+            // 根据策略决定是否继续，这里选择继续处理当前父项的新子项
+        }
+
+        if (!childItems || childItems.length === 0) {
+            console.log(`[IndividualNestedCache] Parent '${parentId}' in namespace '${parentNamespace}': No child items found in list '${childListName as string}'. Any old children were cleared.`);
+            continue;
+        }
+
+        console.log(`[IndividualNestedCache] Parent '${parentId}': Processing ${childItems.length} child items from list '${childListName as string}'.`);
+        const pipeline = redis.pipeline();
+        let childrenProcessedCount = 0;
+
+        for (const childItem of childItems) {
+            const childId = childItem[childIdField as string];
+            if (childId === undefined || childId === null || childId.toString().trim() === "") {
+                console.warn(`[IndividualNestedCache] Parent '${parentId}', Child item in list '${childListName as string}' is missing ID field '${childIdField as string}' or ID is null/empty. Skipping child:`, childItem);
+                continue;
+            }
+
+            const childRedisKey = `${parentNamespace}:${parentId}:${childNamespace}:${childId.toString()}`;
+            
+            // 将子对象转换为 [field, value, field, value, ...] 的数组或 Record<string, string>
+            // Redis HMSET/HSET 命令要求值是 string | number | Buffer.
+            // 我们将所有值转换为字符串以保持一致性。
+            const childItemMap: { [key: string]: string } = {};
+            for (const key in childItem) {
+                if (Object.prototype.hasOwnProperty.call(childItem, key)) {
+                    const value = childItem[key];
+                    childItemMap[key] = value === null || value === undefined ? "" : String(value);
+                }
+            }
+
+            if (Object.keys(childItemMap).length > 0) {
+                pipeline.hmset(childRedisKey, childItemMap);
+                pipeline.expire(childRedisKey, ttlSeconds);
+                childrenProcessedCount++;
+            } else {
+                console.warn(`[IndividualNestedCache] Parent '${parentId}', Child ID '${childId}': Resulting map for HASH was empty. Skipping HMSET for key '${childRedisKey}'. Child item:`, childItem);
+            }
+        }
+
+        if (childrenProcessedCount > 0) {
+            try {
+                const results = await pipeline.exec();
+                console.log(`[IndividualNestedCache] Parent '${parentId}': Pipeline executed for ${childrenProcessedCount} children. Results count: ${results ? results.length : 'N/A'}.`);
+                // 可选：检查 pipeline 执行结果中的错误
+                if (results) {
+                    results.forEach((result, index) => {
+                        if (result && result[0]) { // result[0] 是错误对象
+                            console.error(`[IndividualNestedCache] Parent '${parentId}': Error in pipeline command for child (index ${Math.floor(index / 2)}): `, result[0]);
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error(`[IndividualNestedCache] Parent '${parentId}': Critical error executing Redis pipeline for ${childrenProcessedCount} children. Error:`, error);
+            }
+        } else {
+            console.log(`[IndividualNestedCache] Parent '${parentId}': No children were suitable for caching after filtering.`);
+        }
+    }
+    console.log(`[IndividualNestedCache] Finished processing all parent items for parent namespace '${parentNamespace}'.`);
+}

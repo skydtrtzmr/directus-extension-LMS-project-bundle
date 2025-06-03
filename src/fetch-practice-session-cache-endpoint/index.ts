@@ -18,69 +18,99 @@ export default defineEndpoint((router, context) => {
     // context 参数包含 services, database, getSchema, logger, env 等
     // const { services, getSchema, logger } = context;
 
-    // GET /your-extension-route/practice_session_qresults (获取所有缓存的 session_qresults 的 session_id 列表 - 示例)
-    // 注意：此路由列出的是 practice_session 的 ID，因为缓存键是 'practice_session_qresults:SESSION_ID'
-    router.get('/practice_session_qresults', async (_req, res) => {
+    // GET /your-extension-route/practice_sessions_with_qresults_ids
+    // 修改路由，用于获取所有包含缓存 qresults 的 practice_session 的 ID 列表
+    router.get('/practice_sessions_with_qresults_ids', async (_req, res) => {
         try {
-            // 示例：获取所有 'practice_session_qresults:*' 格式的键
-            const sessionKeys = await redis.keys('practice_session_qresults:*');
-            const sessionIds = sessionKeys.map(key => key.replace('practice_session_qresults:', ''));
-            return res.json({ session_ids: sessionIds });
+            // 新的缓存键格式: parentNamespace:parentId:childNamespace:childId
+            // 例如: practice_session:some_session_id:qresult:some_qresult_id
+            // 我们需要扫描 practice_session:*:qresult:* 来找出所有相关的键
+            const pattern = 'practice_session:*:qresult:*';
+            context.logger.info(`Scanning Redis for keys matching pattern: ${pattern}`);
+            const keys = await redis.keys(pattern);
+            
+            // 从键中提取唯一的 sessionId
+            const sessionIds = new Set<string>();
+            keys.forEach(key => {
+                const parts = key.split(':');
+                // 期望格式: practice_session (0) : sessionId (1) : qresult (2) : qresultId (3)
+                if (parts.length === 4 && parts[0] === 'practice_session' && parts[2] === 'qresult' && parts[1] !== undefined) {
+                    sessionIds.add(parts[1]);
+                }
+            });
+
+            context.logger.info(`Found ${sessionIds.size} unique session IDs with cached qresults.`);
+            return res.json({ session_ids: Array.from(sessionIds) });
         } catch (error) {
-            context.logger.error(error, "Error fetching practice session IDs from cache keys");
-            return res.status(500).json({ error: 'Failed to fetch practice session IDs from cache' });
+            context.logger.error(error, "Error fetching practice session IDs from new cache structure");
+            return res.status(500).json({ error: 'Failed to fetch practice session IDs' });
         }
     });
 
-    // GET /your-extension-route/practice_session_qresults/:sessionId/qresults
-    // 修改了路由以更清晰地表示获取的是某个 session 的 qresults
-    // 旧路由: /practice_session_qresults/:id
-    // 如果您希望保持旧路由 /practice_session_qresults/:id 来获取 qresults，可以将下面的 :sessionId/qresults 部分去掉
-    // 并将 req.params.sessionId 替换为 req.params.id
-    router.get('/practice_session_qresults/:sessionId/qresults', async (req, res) => {
-        const sessionId = req.params.sessionId;
+    // GET /your-extension-route/practice_session/:sessionId/qresults
+    // 获取指定 practice_session 的所有 question_results
+    router.get('/practice_session/:sessionId/qresults', async (req, res) => {
+        const { sessionId: sessionIdFromParams } = req.params; // sessionIdFromParams is string | undefined
 
-        if (!sessionId) {
-            return res.status(400).json({ error: 'Session ID is required' });
+        // More robust check to ensure sessionId is a non-empty string
+        if (typeof sessionIdFromParams !== 'string' || sessionIdFromParams.trim() === '') {
+            return res.status(400).json({ error: 'Session ID is required and must be a non-empty string' });
         }
+        
+        // Now, sessionIdFromParams is definitely a non-empty string.
+        // For clarity, assign it to a new variable with a clear type, though TS should infer it.
+        const sessionId: string = sessionIdFromParams;
 
-        // 缓存键的格式与 cacheNestedListToRedisHashes 中使用的 parentNamespace:parentId 一致
-        const cacheKey = `practice_session_qresults:${sessionId}`;
+        // 缓存键的模式: practice_session:sessionId:qresult:*
+        const cacheKeyPattern = `practice_session:${sessionId}:qresult:*`;
+        context.logger.info(`Fetching qresults for session ID ${sessionId} using pattern: ${cacheKeyPattern}`);
 
         try {
-            // 从 Redis Hash 中获取所有 question_results
-            // hgetall 返回一个对象: { field1: value1, field2: value2, ... }
-            // 在这里，field 是 question_result_id, value 是 question_result 的 JSON 字符串
-            const cachedQResultsMap = await redis.hgetall(cacheKey);
+            const qresultKeys = await redis.keys(cacheKeyPattern);
 
-            if (cachedQResultsMap && Object.keys(cachedQResultsMap).length > 0) {
-                const qResultsArray = Object.values(cachedQResultsMap).map(qResultString => {
-                    try {
-                        return JSON.parse(qResultString);
-                    } catch (parseError) {
-                        context.logger.error(parseError, `Error parsing cached question result for session ID: ${sessionId}, data: ${qResultString}`);
-                        // 如果单个解析失败，可以返回 null 或抛出错误，或者从结果中过滤掉
-                        return null; 
-                    }
-                }).filter(qResult => qResult !== null); // 过滤掉解析失败的项目
-
-                return res.json(qResultsArray);
-            } else {
-                // 缓存未命中或该 session 没有任何 qresults
-                // 根据您的 cacheNestedListToRedisHashes 逻辑，
-                // 如果一个 parentItem 没有 childItems，会执行 redis.del(redisHashKey)
-                // 所以空对象 {} 意味着没有缓存项，或者确实没有子项。
-                return res.status(404).json({ error: `No question results found in cache for session ID ${sessionId}. It might not exist or has no results.` });
+            if (!qresultKeys || qresultKeys.length === 0) {
+                context.logger.info(`No qresult keys found for session ID ${sessionId} with pattern ${cacheKeyPattern}.`);
+                return res.status(404).json({ 
+                    message: `No question results found in cache for session ID ${sessionId}. It might not exist, have no results, or results may have expired.`,
+                    data: [] // 返回空数组表示没有结果
+                });
             }
+
+            context.logger.info(`Found ${qresultKeys.length} qresult keys for session ID ${sessionId}. Fetching all...`);
+            const pipeline = redis.pipeline();
+            qresultKeys.forEach(key => pipeline.hgetall(key));
+            const results = await pipeline.exec();
+
+            const qResultsArray: any[] = [];
+            if (results) {
+                results.forEach((resultItem, index) => {
+                    // resultItem is [error, data]
+                    if (resultItem[0]) { // Error for this hgetall
+                        context.logger.error(resultItem[0], `Error fetching HASH data for key ${qresultKeys[index]}`);
+                    } else if (resultItem[1] && Object.keys(resultItem[1]).length > 0) {
+                        // resultItem[1] is the hash object { field: value, ... }
+                        // Potentially convert numbers back if they were stringified, though hgetall usually returns strings
+                        // For now, assume directus/services will handle type coercion if this data is passed to them.
+                        // Or, if clients expect specific types, parse them here.
+                        // Example: resultItem[1].score = parseFloat(resultItem[1].score);
+                        qResultsArray.push(resultItem[1]);
+                    } else {
+                        context.logger.warn(`No data or empty hash returned for key ${qresultKeys[index]}`);
+                    }
+                });
+            }
+            
+            context.logger.info(`Successfully fetched ${qResultsArray.length} qresults for session ID ${sessionId}.`);
+            return res.json(qResultsArray);
+
         } catch (error) {
-            context.logger.error(error, `Error fetching question results for session ID ${sessionId} from cache`);
+            context.logger.error(error, `Error fetching question results for session ID ${sessionId} from new cache structure`);
             return res.status(500).json({ error: 'Failed to fetch question results from cache' });
         }
     });
 
-    // 默认的 "Hello, World!" 路由，可以保留或删除
-    // 我将其修改为指向新的、更具体的路由
+    // 默认路由更新
     router.get('/', (_req, res) => {
-        res.send('Practice Session QResults Cache API Endpoint. Use /practice_session_qresults/:sessionId/qresults to get all question results for a session.');
+        res.send('Practice Session QResults Cache API. Use /practice_session/:sessionId/qresults for specific session data, or /practice_sessions_with_qresults_ids to list sessions.');
     });
 });
