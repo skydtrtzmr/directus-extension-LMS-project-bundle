@@ -219,7 +219,7 @@ export async function cacheNestedListToRedisHashes<
     console.log(`[NestedCache] Finished processing for namespace '${parentNamespace}'.`);
 }
 
-// [2024-05-26] 新增函数：将嵌套数据列表的子项缓存为独立的Redis Hash
+// [2025-05-26] 新增函数：将嵌套数据列表的子项缓存为独立的Redis Hash
 // 每个子项都拥有自己的Redis键，格式为 parentNamespace:parentId:childNamespace:childId
 // 这样做的好处是，更新单个子项时，只需要修改对应的Hash，而不需要重写整个父项的子项列表
 export async function cacheNestedObjectsToIndividualRedisHashes<
