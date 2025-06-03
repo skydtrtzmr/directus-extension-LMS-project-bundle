@@ -78,6 +78,11 @@
 				"type": "endpoint",
 				"name": "fetch-practice-session-info-endpoint",
 				"source": "src/fetch-practice-session-info-endpoint/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "update-practice-session-info-endpoint",
+				"source": "src/update-practice-session-info-endpoint/index.ts"
 			}
 		],
 		"host": "^10.10.0"
