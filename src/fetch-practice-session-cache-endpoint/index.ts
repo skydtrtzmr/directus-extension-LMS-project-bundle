@@ -7,7 +7,7 @@ import IORedis from 'ioredis'; // 确保你已经安装了 ioredis
 // import { ItemsService } from '@directus/services'; // 如果需要回源
 
 // 在模块顶层或合适的地方初始化 Redis 连接
-// 确保这个 Redis 实例与你的 set-practice-session-cache-hook.ts 中使用的配置一致
+// 确保这个 Redis 实例与你的 set-practice-session-qresults-cache-hook.ts 中使用的配置一致
 const redis = new IORedis(process.env.REDIS!, {
     maxRetriesPerRequest: null,
     // 如果你的缓存和钩子在不同的 Redis DB，这里要指定正确的 db

@@ -324,3 +324,84 @@ export async function cacheNestedObjectsToIndividualRedisHashes<
     }
     console.log(`[IndividualNestedCache] Finished processing all parent items for parent namespace '${parentNamespace}'.`);
 }
+
+// 辅助函数：递归扁平化对象，键名用指定分隔符连接
+// 所有值最终都会转换为字符串，以便存入 Redis Hash
+function flattenObjectRecursive(
+    obj: any,
+    parentKey: string = '',
+    separator: string = '-',
+    result: Record<string, string> = {} // 初始化 result 对象
+): Record<string, string> {
+    for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+            const newKey = parentKey ? parentKey + separator + key : key;
+            const value = obj[key];
+
+            if (value === null || value === undefined) {
+                result[newKey] = String(value); // 'null' 或 'undefined' 字符串
+            } else if (typeof value === 'object' && !Array.isArray(value)) {
+                // 是对象但不是数组，递归
+                flattenObjectRecursive(value, newKey, separator, result);
+            } else if (Array.isArray(value)) {
+                // 数组转换为 JSON 字符串
+                result[newKey] = JSON.stringify(value);
+            } else {
+                // 基本类型 (string, number, boolean, BigInt, Symbol)
+                result[newKey] = String(value);
+            }
+        }
+    }
+    return result;
+}
+
+/**
+ * 将给定的对象扁平化处理后，存入 Redis Hash。
+ * 嵌套键将使用 '-' 分隔符连接。例如：{ a: { b: 1 } } -> Hash Field 'a-b': '1'
+ * 数组值将被 JSON.stringify。
+ * @param redis - IORedis 客户端实例。
+ * @param namespace - Redis键的命名空间, e.g., "practice_session"
+ * @param data - 要扁平化并存入的对象
+ * @param idField - 对象中用作唯一ID的字段名
+ * @param ttlSeconds - Hash的过期时间（秒）
+ */
+export async function setFlattenedObjectToHash(
+    redis: Redis,
+    namespace: string, // Redis键的命名空间, e.g., "practice_session"
+    data: Record<string, any>, // 要扁平化并存入的对象
+    idField: string, // 对象中用作唯一ID的字段名
+    ttlSeconds: number = 3600 // Hash的过期时间（秒）
+): Promise<void> {
+    if (!data || Object.keys(data).length === 0) {
+        console.log(`[FlattenedCache] Namespace '${namespace}': Input data is empty. Nothing to cache.`);
+        return;
+    }
+
+    const idValue = data[idField];
+    if (idValue === undefined || idValue === null || String(idValue).trim() === "") {
+        console.warn(`[FlattenedCache] Namespace '${namespace}': Item is missing ID field '${idField}' or ID is null/empty. Skipping. Data (first 100 chars):`, JSON.stringify(data).substring(0, 100) + "...");
+        return;
+    }
+
+    const hashKey = `${namespace}:${String(idValue)}`;
+    console.log(`[FlattenedCache] Hash key '${hashKey}': Starting to flatten and cache data.`);
+
+    const flattenedData: Record<string, string> = flattenObjectRecursive(data);
+
+    if (Object.keys(flattenedData).length === 0) {
+        console.log(`[FlattenedCache] Hash key '${hashKey}': Data resulted in an empty flattened map. Nothing to cache.`);
+        // await redis.del(hashKey); // Consider if old key should be deleted
+        return;
+    }
+
+    const pipeline = redis.pipeline();
+    pipeline.hmset(hashKey, flattenedData);
+    pipeline.expire(hashKey, ttlSeconds);
+
+    try {
+        await pipeline.exec();
+        console.log(`[FlattenedCache] Hash key '${hashKey}': Successfully cached ${Object.keys(flattenedData).length} flattened fields with TTL ${ttlSeconds}s.`);
+    } catch (error) {
+        console.error(`[FlattenedCache] Hash key '${hashKey}': Error executing Redis pipeline. Error:`, error);
+    }
+}

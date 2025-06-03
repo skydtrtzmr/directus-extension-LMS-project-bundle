@@ -1,4 +1,4 @@
-// set-practice-session-cache-hook/index.ts
+// set-practice-session-qresults-cache-hook/index.ts
 import { defineHook } from "@directus/extensions-sdk";
 import IORedis from "ioredis";
 import { cacheNestedObjectsToIndividualRedisHashes } from "../utils/redisUtils";

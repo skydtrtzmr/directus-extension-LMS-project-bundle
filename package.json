@@ -61,13 +61,18 @@
 			},
 			{
 				"type": "hook",
-				"name": "set-practice-session-cache-hook",
-				"source": "src/set-practice-session-cache-hook/index.ts"
+				"name": "set-practice-session-qresults-cache-hook",
+				"source": "src/set-practice-session-qresults-cache-hook/index.ts"
 			},
 			{
 				"type": "endpoint",
 				"name": "fetch-practice-session-cache-endpoint",
 				"source": "src/fetch-practice-session-cache-endpoint/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "set-practice-session-info-cache-hook",
+				"source": "src/set-practice-session-info-cache-hook/index.ts"
 			}
 		],
 		"host": "^10.10.0"
@@ -81,7 +86,7 @@
 	},
 	"devDependencies": {
 		"@directus/extensions-sdk": "13.1.0",
-		"@types/node": "^22.15.21",
+		"@types/node": "^22.15.29",
 		"typescript": "^5.8.3"
 	},
 	"dependencies": {
