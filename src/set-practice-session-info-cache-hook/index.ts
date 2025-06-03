@@ -83,6 +83,10 @@ export default defineHook(
 					try {
 						await setFlattenedObjectToHash(
 							redis,
+							// 拼接用户id与namespace，便于查询redis
+
+							// TODO [2025-06-03] 以后来改，暂时不改了，因为需要改数据结构实在是太麻烦。
+							// `directus_user:${sessionData.exercises_students_id.students_id.directus_user}:${CACHE_NAMESPACE}`,
 							CACHE_NAMESPACE,
 							sessionData,
 							ID_FIELD,
