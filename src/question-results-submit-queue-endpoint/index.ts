@@ -130,7 +130,13 @@ export default defineEndpoint({
                     for (const key in questionResultItem) {
                         if (Object.prototype.hasOwnProperty.call(questionResultItem, key)) {
                             const value = questionResultItem[key];
-                            itemToCache[key] = (value === null || value === undefined) ? "" : String(value);
+                            if (value === null || value === undefined) {
+                                itemToCache[key] = "";
+                            } else if (typeof value === 'object') { // Covers arrays and plain objects
+                                itemToCache[key] = JSON.stringify(value);
+                            } else { // Covers string, number, boolean, bigint, symbol
+                                itemToCache[key] = String(value);
+                            }
                         }
                     }
 
