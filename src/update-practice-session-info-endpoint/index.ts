@@ -1,10 +1,18 @@
 import { defineEndpoint } from '@directus/extensions-sdk';
 import IORedis from "ioredis";
+import { Queue, Worker } from "bullmq";
 import type { EndpointExtensionContext } from "@directus/extensions";
 
-// Initialize Redis client
-const redis = new IORedis(process.env.REDIS!, {
+// Initialize Redis client (for cache)
+const redisCacheClient = new IORedis(process.env.REDIS!, {
 	maxRetriesPerRequest: null,
+	enableOfflineQueue: false, // Recommended for BullMQ connection to be distinct
+});
+
+// Initialize BullMQ Queue
+const UPDATE_QUEUE_NAME = "practice-session-directus-update-queue";
+const practiceSessionUpdateQueue = new Queue(UPDATE_QUEUE_NAME, {
+	connection: redisCacheClient,
 });
 
 const CACHE_NAMESPACE = "practice_session_info";
@@ -27,63 +35,129 @@ function stringifyForRedisValue(value: any): string {
 	return String(value);
 }
 
-export default defineEndpoint((router, { logger }: EndpointExtensionContext) => {
-	router.patch("/:id", async (req, res) => {
-		const practiceSessionId = req.params.id;
-		const updatesFromBody = req.body;
+export default defineEndpoint(
+	async (router, context: EndpointExtensionContext) => {
+		const { services, getSchema, logger } = context; // Removed accountability from direct context destructuring
 
-		if (!practiceSessionId) {
-			return res.status(400).json({ error: "Practice session ID is required in the path." });
-		}
+		// ### 定义 Worker
+		const practiceSessionUpdateWorker = new Worker(
+			UPDATE_QUEUE_NAME,
+			async (job) => {
+				// jobAccountability is now expected to be of type 'any' or a known structure if possible
+				const { practiceSessionId, updatesToApply, jobAccountability } = job.data as { practiceSessionId: string, updatesToApply: any, jobAccountability: any };
+				logger.info(`Worker (Job ID: ${job.id}): Processing Directus update for practice_session ID: ${practiceSessionId}`);
 
-		if (typeof updatesFromBody !== 'object' || updatesFromBody === null || Object.keys(updatesFromBody).length === 0) {
-			return res.status(400).json({ error: "Request body must be a non-empty JSON object containing fields to update." });
-		}
+				try {
+					const itemsService = new services.ItemsService("practice_sessions", {
+						schema: await getSchema(),
+						// Pass jobAccountability; ItemsService will handle it (could be null)
+						accountability: jobAccountability,
+					});
 
-		const hashKey = `${CACHE_NAMESPACE}:${practiceSessionId}`;
+					// IMPORTANT ASSUMPTION:
+					// This assumes that `updatesToApply` (from req.body) contains field names
+					// that can be directly used by `itemsService.updateOne()`.
+					// If `updatesToApply` has flattened keys like "parent-child-field",
+					// and Directus needs { parent: { child: { field: value } } } for update,
+					// then a transformation (unflattening) step is needed here before calling updateOne.
+					// For this example, we proceed with direct usage.
+					const updatedItemKey = await itemsService.updateOne(practiceSessionId, updatesToApply);
 
-		try {
-			const exists = await redis.exists(hashKey);
-			if (!exists) {
-				return res.status(404).json({ 
-					error: `Practice session info with ID '${practiceSessionId}' not found in cache. Cannot update.` 
-				});
-			}
+					if (!updatedItemKey) {
+						logger.error(`Worker (Job ID: ${job.id}): Directus update for practice_session ID: ${practiceSessionId} returned an unexpected null or empty response.`);
+						throw new Error(`Directus update operation for ${practiceSessionId} returned an unexpected response.`);
+					}
 
-			const redisFieldUpdates: Record<string, string> = {};
-			for (const key in updatesFromBody) {
-				if (Object.prototype.hasOwnProperty.call(updatesFromBody, key)) {
-					// Ensure keys are strings and values are stringified as per cache storage rules
-					redisFieldUpdates[String(key)] = stringifyForRedisValue(updatesFromBody[key]);
+					logger.info(`Worker (Job ID: ${job.id}): Successfully updated practice_session ID: ${practiceSessionId} in Directus. Response: ${updatedItemKey}`);
+
+				} catch (error: any) {
+					logger.error(`Worker (Job ID: ${job.id}): Error processing Directus update for practice_session ID: ${practiceSessionId}. Error: ${error.message}`, error);
+					throw error; // Re-throw to let BullMQ handle failure and retries
 				}
+			},
+			{
+				connection: redisCacheClient,
+				concurrency: 5, // Adjust concurrency as needed
+				// attempts: 3, // Default attempts for job retries
+				// backoff: { type: 'exponential', delay: 1000 } // Default backoff strategy
+			}
+		);
+
+		practiceSessionUpdateWorker.on("completed", (job) => {
+			logger.info(`Worker: Job ${job.id} (practice_session ID: ${job.data?.practiceSessionId}) for Directus update has completed!`);
+		});
+
+		practiceSessionUpdateWorker.on("failed", (job, err) => {
+			logger.error(`Worker: Job ${job?.id} (practice_session ID: ${job?.data?.practiceSessionId}) for Directus update has failed with error: ${err.message}`);
+		});
+
+		logger.info(`BullMQ Worker for queue '${UPDATE_QUEUE_NAME}' initialized and listening.`);
+
+		// API 端点逻辑
+		router.patch("/:id", async (req: any, res) => { // req as any to access req.accountability
+			const practiceSessionId = req.params.id;
+			const updatesFromBody = req.body;
+			// jobAccountability is 'any' here as we can't import the specific type
+			const jobAccountability: any = req.accountability || null;
+
+			if (!practiceSessionId) {
+				return res.status(400).json({ error: "Practice session ID is required in the path." });
 			}
 
-			if (Object.keys(redisFieldUpdates).length === 0) {
-				// This might happen if the input object was technically non-empty but contained no own-properties,
-				// or if future logic filtered out all keys.
-				return res.status(400).json({ error: "No valid fields to update were provided in the request body."});
+			if (typeof updatesFromBody !== 'object' || updatesFromBody === null || Object.keys(updatesFromBody).length === 0) {
+				return res.status(400).json({ error: "Request body must be a non-empty JSON object containing fields to update." });
 			}
 
-			const pipeline = redis.pipeline();
-			pipeline.hmset(hashKey, redisFieldUpdates); // Update specified fields in the hash
-			pipeline.expire(hashKey, CACHE_TTL_SECONDS);   // Refresh the TTL for the entire hash
-			await pipeline.exec();
+			const hashKey = `${CACHE_NAMESPACE}:${practiceSessionId}`;
 
-			logger.info(`Practice session info cache updated for ID: ${practiceSessionId}, Fields: ${Object.keys(redisFieldUpdates).join(', ')}`);
-			return res.status(200).json({ 
-				message: "Practice session info updated successfully in cache.",
-				updatedCacheKey: hashKey,
-				updatedFields: Object.keys(redisFieldUpdates) 
-			});
+			try {
+				const exists = await redisCacheClient.exists(hashKey);
+				if (!exists) {
+					logger.warn(`Cache entry for practice_session ID '${practiceSessionId}' not found. Update will only be queued for Directus.`);
+				}
 
-		} catch (error: any) {
-			logger.error(
-				error, 
-				`Error updating practice session info for ID '${practiceSessionId}' in cache:`
-			);
-			return res.status(500).json({ 
-				error: "An internal server error occurred while updating the cache." 
-			});
-		}
-	});
-});
+				const redisFieldUpdates: Record<string, string> = {};
+				for (const key in updatesFromBody) {
+					if (Object.prototype.hasOwnProperty.call(updatesFromBody, key)) {
+						redisFieldUpdates[String(key)] = stringifyForRedisValue(updatesFromBody[key]);
+					}
+				}
+
+				if (Object.keys(redisFieldUpdates).length === 0 && Object.keys(updatesFromBody).length > 0) {
+					logger.warn(`Practice session ID '${practiceSessionId}': updatesFromBody had keys, but redisFieldUpdates is empty. This might indicate an issue with stringifyForRedisValue or input structure.`);
+				}
+
+				if (exists && Object.keys(redisFieldUpdates).length > 0) {
+					const pipeline = redisCacheClient.pipeline();
+					pipeline.hmset(hashKey, redisFieldUpdates);
+					pipeline.expire(hashKey, CACHE_TTL_SECONDS);
+					await pipeline.exec();
+					logger.info(`Cache updated for practice_session ID: ${practiceSessionId}, Fields: ${Object.keys(redisFieldUpdates).join(', ')}`);
+				} else if (!exists) {
+					logger.info(`Cache for practice_session ID: ${practiceSessionId} did not exist. Cache not updated.`);
+				} else {
+					logger.info(`Cache for practice_session ID: ${practiceSessionId} exists, but no valid fields derived for cache update from body.`);
+				}
+
+				const jobName = `update-directus-practice-session-${practiceSessionId}`;
+				await practiceSessionUpdateQueue.add(jobName, {
+					practiceSessionId: practiceSessionId,
+					updatesToApply: updatesFromBody,
+					jobAccountability: jobAccountability // Pass accountability (as any)
+				});
+				logger.info(`Job '${jobName}' added to queue '${UPDATE_QUEUE_NAME}' for Directus update of practice_session ID: ${practiceSessionId}`);
+
+				return res.status(200).json({
+					message: "Practice session update processed: Cache updated (if applicable) and Directus update queued.",
+					updatedCacheKey: exists && Object.keys(redisFieldUpdates).length > 0 ? hashKey : null,
+					updatedCacheFields: exists && Object.keys(redisFieldUpdates).length > 0 ? Object.keys(redisFieldUpdates) : [],
+					queuedJobName: jobName
+				});
+
+			} catch (error: any) {
+				logger.error(error, `Error processing practice_session update for ID '${practiceSessionId}':`);
+				return res.status(500).json({ error: "An internal server error occurred." });
+			}
+		});
+	}
+);
