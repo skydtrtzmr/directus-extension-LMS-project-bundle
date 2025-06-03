@@ -284,7 +284,13 @@ export async function cacheNestedObjectsToIndividualRedisHashes<
             for (const key in childItem) {
                 if (Object.prototype.hasOwnProperty.call(childItem, key)) {
                     const value = childItem[key];
-                    childItemMap[key] = value === null || value === undefined ? "" : String(value);
+                    if (value === null || value === undefined) {
+                        childItemMap[key] = "";
+                    } else if (typeof value === 'object') { // Covers arrays and plain objects
+                        childItemMap[key] = JSON.stringify(value);
+                    } else { // Covers string, number, boolean, bigint, symbol
+                        childItemMap[key] = String(value);
+                    }
                 }
             }
 
