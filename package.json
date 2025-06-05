@@ -83,6 +83,11 @@
 				"type": "endpoint",
 				"name": "update-practice-session-info-endpoint",
 				"source": "src/update-practice-session-info-endpoint/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "set-user-ps-cache-hook",
+				"source": "src/set-user-ps-cache-hook/index.ts"
 			}
 		],
 		"host": "^10.10.0"
