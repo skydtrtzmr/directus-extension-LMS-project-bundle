@@ -147,7 +147,7 @@ export default defineHook(
 				if (commandsInPipeline > 0) {
 					const results = await pipeline.exec();
 					logger.info(
-						`[${REVERSE_INDEX_PREFIX}] Redis pipeline executed for ${userToPracticeSessionsMap.size} users. Results length: ${results?.length || 0}.`
+						// `[${REVERSE_INDEX_PREFIX}] Redis pipeline executed for ${userToPracticeSessionsMap.size} users. Results length: ${results?.length || 0}.`
 					);
 					 // Optional: Check pipeline results for errors
 					if (results) {

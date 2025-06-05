@@ -306,7 +306,7 @@ export async function cacheNestedObjectsToIndividualRedisHashes<
         if (childrenProcessedCount > 0) {
             try {
                 const results = await pipeline.exec();
-                console.log(`[IndividualNestedCache] Parent '${parentId}': Pipeline executed for ${childrenProcessedCount} children. Results count: ${results ? results.length : 'N/A'}.`);
+                // console.log(`[IndividualNestedCache] Parent '${parentId}': Pipeline executed for ${childrenProcessedCount} children. Results count: ${results ? results.length : 'N/A'}.`);
                 // 可选：检查 pipeline 执行结果中的错误
                 if (results) {
                     results.forEach((result, index) => {
