@@ -330,7 +330,7 @@ export async function cacheNestedObjectsToIndividualRedisHashes<
 function flattenObjectRecursive(
     obj: any,
     parentKey: string = '',
-    separator: string = '-',
+    separator: string = '__', // 使用双下划线分割，而不是短横；短横容易引起麻烦
     result: Record<string, string> = {} // 初始化 result 对象
 ): Record<string, string> {
     for (const key in obj) {
@@ -357,7 +357,7 @@ function flattenObjectRecursive(
 
 /**
  * 将给定的对象扁平化处理后，存入 Redis Hash。
- * 嵌套键将使用 '-' 分隔符连接。例如：{ a: { b: 1 } } -> Hash Field 'a-b': '1'
+ * 嵌套键将使用 '__' 分隔符连接。例如：{ a: { b: 1 } } -> Hash Field 'a__b': '1'
  * 数组值将被 JSON.stringify。
  * @param redis - IORedis 客户端实例。
  * @param namespace - Redis键的命名空间, e.g., "practice_session"
