@@ -88,6 +88,11 @@
 				"type": "hook",
 				"name": "set-user-ps-cache-hook",
 				"source": "src/set-user-ps-cache-hook/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "fetch-user-ps-cache-endpoint",
+				"source": "src/fetch-user-ps-cache-endpoint/index.ts"
 			}
 		],
 		"host": "^10.10.0"
