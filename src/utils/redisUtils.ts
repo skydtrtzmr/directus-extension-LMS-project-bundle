@@ -219,6 +219,24 @@ export async function cacheNestedListToRedisHashes<
     console.log(`[NestedCache] Finished processing for namespace '${parentNamespace}'.`);
 }
 
+// 更新列表缓存。
+export async function updateListCache(
+    redis: Redis,
+    key: string, // 在redis中的表名
+    fetchFunction: () => Promise<any[]>, // 注意这里一定返回的是个数组，因为是列表
+    field: string, // 需要存入列表的字段
+    ttl: number = 3600
+): Promise<void> {
+    const data = await fetchFunction();
+    const resultArray: string[] = data.map((item) => item[field]);
+    console.log("resultArray:", resultArray);
+
+    redis.rpush(key, ...resultArray);
+    redis.expire(key, ttl).then((didSetExpire) => {
+        // console.log("Key has an expiration time set:", didSetExpire);
+    }); // 设置过期时间
+}
+
 // [2025-05-26] 新增函数：将嵌套数据列表的子项缓存为独立的Redis Hash
 // 每个子项都拥有自己的Redis键，格式为 parentNamespace:parentId:childNamespace:childId
 // 这样做的好处是，更新单个子项时，只需要修改对应的Hash，而不需要重写整个父项的子项列表

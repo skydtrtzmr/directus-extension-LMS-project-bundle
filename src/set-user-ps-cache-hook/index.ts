@@ -5,6 +5,9 @@ import type {
 	RegisterFunctions,
 } from "@directus/extensions";
 
+// 概述：
+// 这是一个反向索引，用于存储用户与练习会话的关联关系，便于根据用户ID查询其所有练习会话ID。
+
 // 定义 practice_session 的相关数据结构，仅包含需要的字段
 // 这有助于类型检查和代码可读性
 interface StudentExerciseInfo {
@@ -191,11 +194,13 @@ export default defineHook(
 			await fetchAndCacheUserPracticeSessions();
 		});
 
-		action("practice_sessions.items.create", async (meta, context) => {
-            logger.info(
-                "Practice session created, triggering info cache refresh."
-            );
-            await fetchAndCacheUserPracticeSessions();
-        });
+		// action("practice_sessions.items.create", async (meta, context) => {
+        //     logger.info(
+        //         "Practice session created, triggering info cache refresh."
+        //     );
+        //     await fetchAndCacheUserPracticeSessions();
+        // });
+
+		// TODO 暂时注释掉了，不然分发时间的时候会疯狂触发。
 	}
 );

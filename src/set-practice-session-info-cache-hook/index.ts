@@ -195,14 +195,15 @@ export default defineHook(
 		});
 
 		// 2. 增量更新缓存
-		action("practice_sessions.items.create", async (meta, context) => {
-			logger.info(
-                `[${CACHE_NAMESPACE}] Practice session created (ID: ${meta.key}), updating cache.`
-            );
-			await updateSingleSessionInCache(meta.key);
-		});
+		// action("practice_sessions.items.create", async (meta, context) => {
+		// 	logger.info(
+        //         `[${CACHE_NAMESPACE}] Practice session created (ID: ${meta.key}), updating cache.`
+        //     );
+		// 	await updateSingleSessionInCache(meta.key);
+		// });
 
 		action("practice_sessions.items.update", async (meta, context) => {
+			logger.info("update meta", meta);
 			if (!Array.isArray(meta.keys)) return;
 			logger.info(
                 `[${CACHE_NAMESPACE}] Practice sessions updated (IDs: ${meta.keys.join(", ")}), updating cache.`
@@ -212,6 +213,10 @@ export default defineHook(
 			}
 		});
 
+		// [2025-06-07] 注意，item事件没法监控到关联字段的级联删除。
+		// 比如，删除一个练习会话，会级联删除关联的练习结果。
+		// 但是，item事件没法监控到这个级联删除。
+		// 所以，我们需要使用collection事件来监控这个级联删除。
 		action("practice_sessions.items.delete", async (meta, context) => {
 			logger.info("delete meta", meta);
 			if (!Array.isArray(meta.payload)) return;

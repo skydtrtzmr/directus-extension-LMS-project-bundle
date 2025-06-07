@@ -93,6 +93,16 @@
 				"type": "endpoint",
 				"name": "fetch-user-ps-cache-endpoint",
 				"source": "src/fetch-user-ps-cache-endpoint/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "set-user-email-list-cache-hook",
+				"source": "src/set-user-email-list-cache-hook/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "fetch-user-email-list-pop-endpoint",
+				"source": "src/fetch-user-email-list-pop-endpoint/index.ts"
 			}
 		],
 		"host": "^10.10.0"
@@ -106,7 +116,7 @@
 	},
 	"devDependencies": {
 		"@directus/extensions-sdk": "13.1.0",
-		"@types/node": "^22.15.29",
+		"@types/node": "^22.15.30",
 		"typescript": "^5.8.3"
 	},
 	"dependencies": {

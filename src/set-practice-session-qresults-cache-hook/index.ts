@@ -113,12 +113,12 @@ export default defineHook(
         });
 
         // 注意，如果是用扩展创建的practice_sessions，需要专门写上emit才能触发这个钩子。
-        action("practice_sessions.items.create", async (meta, context) => {
-            logger.info(
-                "Practice session created, triggering QResults cache refresh."
-            );
-            await fetchAndCachePracticeSessionResults();
-        });
+        // action("practice_sessions.items.create", async (meta, context) => {
+        //     logger.info(
+        //         "Practice session created, triggering QResults cache refresh."
+        //     );
+        //     await fetchAndCachePracticeSessionResults();
+        // });
 
         // 对于更新触发的，需要另外写，因为这里的是拉去所有练习回话的答题结果。
         // 而我们需要根据发生变化的具体id来更新缓存。

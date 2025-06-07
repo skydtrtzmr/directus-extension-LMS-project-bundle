@@ -8,15 +8,14 @@ export default defineHook(({ filter }, { services, database, logger }) => {
 		// 只在状态变更为published时处理
 		if (!payload || payload.status !== 'published') return payload;
 		
+		const exerciseId = meta.keys?.[0] || meta.key;
+		
+		if (!exerciseId) {
+			logger.warn('无法获取有效的考试ID');
+			return payload;
+		}
+		
 		try {
-			// 获取更新前的数据检查状态是否为draft
-			const exerciseId = meta.keys?.[0] || meta.key;
-			
-			if (!exerciseId) {
-				logger.warn('无法获取有效的考试ID');
-				return payload;
-			}
-			
 			const accountability = context.accountability;
 			const schema = context.schema;
 			const serviceOptions = { schema, accountability };
@@ -35,82 +34,70 @@ export default defineHook(({ filter }, { services, database, logger }) => {
 			
 			logger.info(`开始为考试ID: ${exerciseId} 批量发卷流程`);
 			
-			// 创建所需服务实例
-			const paperSectionsService = new ItemsService('paper_sections', serviceOptions);
-			const paperSectionsQuestionsService = new ItemsService('paper_sections_questions', serviceOptions);
-			const exercisesStudentsService = new ItemsService('exercises_students', serviceOptions);
-			const practiceSessionsService = new ItemsService('practice_sessions', serviceOptions);
-			const questionResultsService = new ItemsService('question_results', serviceOptions);
-			
-			// 1. 获取考试和试卷信息
-			const exercise = exerciseBeforeUpdate; // 已经有了基本信息，如果需要更多信息再查询一次
-			if (!exercise || !exercise.paper) {
-				// 如果缺少必要信息，再查询一次
-				const fullExercise = await exercisesService.readOne(exerciseId);
-				if (!fullExercise || !fullExercise.paper) {
-					throw new Error('找不到有效的考试或试卷信息');
-				}
-				
-				// 使用完整信息替换原来的引用
-				Object.assign(exercise, fullExercise);
-			}
-			
-			// 2. 获取试卷章节
-			const paperSections = await paperSectionsService.readByQuery({
-				filter: { paper_id: { _eq: exercise.paper } },
-				fields: ['id', 'points_per_question']
-			});
-			
-			if (!paperSections.length) {
-				throw new Error('试卷没有章节信息');
-			}
-			
-			// 3. 获取章节ID列表
-			const sectionIds = paperSections.map((section: { id: string }) => section.id);
-			
-			// 4. 获取所有题目信息
-			const questions = await paperSectionsQuestionsService.readByQuery({
-				filter: { paper_sections_id: { _in: sectionIds } },
+			// --- 优化1：合并数据查询 ---
+			// 使用深度查询一次性获取所有需要的数据。
+			// 假设关系字段名为 'students' 和 'questions'，并使用(limit: -1)确保获取所有相关项。
+			const exerciseData = await exercisesService.readOne(exerciseId, {
 				fields: [
-					'id', 
-					'paper_sections_id', 
-					'questions_id.type', 
-					'questions_id.correct_ans_select_radio', 
-					'questions_id.correct_ans_select_multiple_checkbox'
-				]
+					'students(limit: -1).id',
+					'paper.paper_sections(limit: -1).id',
+					'paper.paper_sections(limit: -1).points_per_question',
+					'paper.paper_sections(limit: -1).questions(limit: -1).id',
+					'paper.paper_sections(limit: -1).questions(limit: -1).questions_id.type',
+					'paper.paper_sections(limit: -1).questions(limit: -1).questions_id.correct_ans_select_radio',
+					'paper.paper_sections(limit: -1).questions(limit: -1).questions_id.correct_ans_select_multiple_checkbox',
+				],
 			});
+			
+			const paperSections = exerciseData?.paper?.paper_sections;
+			const students = exerciseData?.students;
+			
+			if (!paperSections?.length) {
+				logger.warn(`考试 ${exerciseId} 的试卷没有章节信息，发卷中止。`);
+				return payload;
+			}
+			
+			if (!students?.length) {
+				logger.warn(`考试 ${exerciseId} 没有找到考生信息，发卷中止。`);
+				return payload;
+			}
+			
+			// 从嵌套结构中提取并扁平化题目列表
+			const questions = paperSections.flatMap((section: any) =>
+				(section.questions || []).map((q: any) => ({
+					...q,
+					paper_sections_id: section.id, // 保留章节ID用于后续查找分值
+				}))
+			);
 			
 			if (!questions.length) {
-				throw new Error('试卷没有题目信息');
-			}
-			
-			// 5. 获取所有考生
-			const students = await exercisesStudentsService.readByQuery({
-				filter: { exercises_id: { _eq: exerciseId } },
-				limit: -1 // 一定注意要把limit设置为-1，否则只会返回100条数据
-			});
-			
-			if (!students.length) {
-				throw new Error('没有找到考生信息');
+				logger.warn(`考试 ${exerciseId} 的试卷没有题目信息，发卷中止。`);
+				return payload;
 			}
 			
 			logger.info(`准备为${students.length}名考生创建练习记录，每人${questions.length}道题目`);
 			
-			// 6. 使用事务批量处理数据以提高性能和保证数据一致性
-			await database.transaction(async trx => {
-				// 构建章节与分值的映射表
-				const sectionPointsMap = new Map(
-					paperSections.map((sec: { id: string; points_per_question: number }) => [sec.id, sec.points_per_question])
-				);
-				// 为每个考生创建练习会话和答题记录
+			// 构建章节与分值的映射表
+			const sectionPointsMap = new Map(
+				paperSections.map((sec: any) => [sec.id, sec.points_per_question])
+			);
+			
+			// --- 优化2: 批量数据插入 ---
+			await database.transaction(async (trx) => {
+				const trxServiceOptions = { schema, accountability, trx };
+				const practiceSessionsService = new ItemsService('practice_sessions', trxServiceOptions);
+				const questionResultsService = new ItemsService('question_results', trxServiceOptions);
+				
+				const allQuestionResults: any[] = [];
+				
 				for (const student of students) {
-					// 创建练习会话
+					// 1. 为每个学生创建练习会话
 					const practiceSessionId = await practiceSessionsService.createOne({
 						exercises_students_id: student.id
-					}, { emitEvents: true, trx });
-					// [2025-05-28] 这里需要emit事件，因为practice_sessions.items.create钩子会根据practice_sessions的id来更新缓存。
+					}, { emitEvents: true });
+					// [2025-05-28] 备注保留: emit事件用于触发缓存更新等后续操作
 					
-					// 批量创建答题记录
+					// 2. 准备该学生的所有答题记录
 					const questionResultsBatch = questions.map((question: any) => ({
 						practice_session_id: practiceSessionId,
 						question_in_paper_id: question.id,
@@ -121,9 +108,13 @@ export default defineHook(({ filter }, { services, database, logger }) => {
 						point_value: sectionPointsMap.get(question.paper_sections_id) ?? 0
 					}));
 					
-					await questionResultsService.createMany(questionResultsBatch, { 
-						emitEvents: false, 
-						trx 
+					allQuestionResults.push(...questionResultsBatch);
+				}
+				
+				// 3. 一次性批量插入所有答题记录
+				if (allQuestionResults.length > 0) {
+					await questionResultsService.createMany(allQuestionResults, {
+						emitEvents: false,
 					});
 				}
 			});
