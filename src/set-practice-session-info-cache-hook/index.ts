@@ -47,6 +47,62 @@ export default defineHook(
 			"expected_end_time",
 		];
 
+		const updateSingleSessionInCache = async (itemId: string | number) => {
+			logger.info(
+				`[${CACHE_NAMESPACE}] Updating single session (ID: ${itemId}) in cache.`
+			);
+			try {
+				const practiceSessionsService = new ItemsService(
+					PRACTICE_SESSION_COLLECTION,
+					{ schema: await getSchema(), accountability: { admin: true } }
+				);
+				const sessionData = await practiceSessionsService.readOne(itemId, {
+					fields: fieldsToFetch,
+				});
+
+				if (sessionData) {
+					await setFlattenedObjectToHash(
+						redis,
+						CACHE_NAMESPACE,
+						sessionData,
+						ID_FIELD,
+						CACHE_TTL_SECONDS
+					);
+					logger.info(
+						`[${CACHE_NAMESPACE}] Successfully cached session (ID: ${itemId}).`
+					);
+				} else {
+					logger.warn(
+						`[${CACHE_NAMESPACE}] Session (ID: ${itemId}) not found, couldn't update cache.`
+					);
+				}
+			} catch (error) {
+				logger.error(
+					error,
+					`[${CACHE_NAMESPACE}] Error updating single session (ID: ${itemId}) in cache:`
+				);
+			}
+		};
+
+		const deleteSessionsFromCache = async (itemIds: (string | number)[]) => {
+			logger.info(
+				`[${CACHE_NAMESPACE}] Deleting sessions (IDs: ${itemIds.join(", ")}) from cache.`
+			);
+			if (itemIds.length === 0) return;
+			try {
+				const keysToDelete = itemIds.map(id => `${CACHE_NAMESPACE}:${id}`);
+				await redis.del(keysToDelete);
+				logger.info(
+					`[${CACHE_NAMESPACE}] Successfully deleted sessions (IDs: ${itemIds.join(", ")}) from cache.`
+				);
+			} catch (error) {
+				logger.error(
+					error,
+					`[${CACHE_NAMESPACE}] Error deleting sessions from cache:`
+				);
+			}
+		};
+
 		const fetchAndCachePracticeSessionInfo = async () => {
 			logger.info(
 				`[${CACHE_NAMESPACE}] Starting to fetch and cache practice session info.`
@@ -129,12 +185,30 @@ export default defineHook(
 			await fetchAndCachePracticeSessionInfo();
 		});
 
-		// TODO 这里需要改进
+		// 增量更新缓存
 		action("practice_sessions.items.create", async (meta, context) => {
-            logger.info(
-                "Practice session created, triggering info cache refresh."
+			logger.info(
+                `[${CACHE_NAMESPACE}] Practice session created (ID: ${meta.key}), updating cache.`
             );
-            await fetchAndCachePracticeSessionInfo();
-        });
+			await updateSingleSessionInCache(meta.key);
+		});
+
+		action("practice_sessions.items.update", async (meta, context) => {
+			if (!Array.isArray(meta.keys)) return;
+			logger.info(
+                `[${CACHE_NAMESPACE}] Practice sessions updated (IDs: ${meta.keys.join(", ")}), updating cache.`
+            );
+			for (const key of meta.keys) {
+				await updateSingleSessionInCache(key);
+			}
+		});
+
+		action("practice_sessions.items.delete", async (meta, context) => {
+			if (!Array.isArray(meta.payload)) return;
+			logger.info(
+                `[${CACHE_NAMESPACE}] Practice sessions deleted (IDs: ${meta.payload.join(", ")}), removing from cache.`
+            );
+			await deleteSessionsFromCache(meta.payload);
+		});
 	}
 );
