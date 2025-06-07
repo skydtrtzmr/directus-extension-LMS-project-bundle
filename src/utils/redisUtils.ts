@@ -405,3 +405,34 @@ export async function setFlattenedObjectToHash(
         console.error(`[FlattenedCache] Hash key '${hashKey}': Error executing Redis pipeline. Error:`, error);
     }
 }
+
+/**
+ * Deletes all keys matching a given pattern using SCAN to avoid blocking Redis.
+ * This is safer for production environments than using the KEYS command.
+ *
+ * @param redis The IORedis client instance.
+ * @param pattern The pattern to match keys against (e.g., "namespace:*").
+ * @param logger Optional logger to log information.
+ */
+export async function deleteKeysByPattern(
+    redis: Redis,
+    pattern: string,
+    logger?: { info: (msg: string) => void; error: (err: any, msg?: string) => void }
+): Promise<void> {
+    const log = logger || { info: console.log, error: (e, m) => console.error(m, e) };
+    log.info(`[RedisUtils] Starting to delete keys matching pattern: ${pattern}`);
+    let cursor = '0';
+    let keysDeletedCount = 0;
+    try {
+        do {
+            const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+            cursor = nextCursor;
+            if (keys.length > 0) {
+                keysDeletedCount += await redis.del(keys);
+            }
+        } while (cursor !== '0');
+        log.info(`[RedisUtils] Finished deleting keys for pattern "${pattern}". Total keys deleted: ${keysDeletedCount}`);
+    } catch (error) {
+        log.error(error, `[RedisUtils] Error while deleting keys with pattern "${pattern}"`);
+    }
+}

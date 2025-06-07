@@ -1,6 +1,6 @@
 import { defineHook } from '@directus/extensions-sdk';
 import IORedis from "ioredis";
-import { setFlattenedObjectToHash } from "../utils/redisUtils";
+import { setFlattenedObjectToHash, deleteKeysByPattern } from "../utils/redisUtils";
 import type {
 	HookExtensionContext,
 	RegisterFunctions,
@@ -105,10 +105,17 @@ export default defineHook(
 
 		const fetchAndCachePracticeSessionInfo = async () => {
 			logger.info(
-				`[${CACHE_NAMESPACE}] Starting to fetch and cache practice session info.`
+				`[${CACHE_NAMESPACE}] Starting full refresh for practice session info.`
 			);
-
+			
 			try {
+				// Step 1: Clean up all old cache entries for this namespace
+				const pattern = `${CACHE_NAMESPACE}:*`;
+				logger.info(`[${CACHE_NAMESPACE}] Clearing all existing cache with pattern: ${pattern}`);
+				await deleteKeysByPattern(redis, pattern, logger);
+
+
+				// Step 2: Fetch all practice sessions from the database
 				const practiceSessionsService = new ItemsService(
 					PRACTICE_SESSION_COLLECTION,
 					{ schema: await getSchema() }
@@ -125,7 +132,7 @@ export default defineHook(
 					allPracticeSessions.length === 0
 				) {
 					logger.info(
-						`[${CACHE_NAMESPACE}] No practice sessions found to cache.`
+						`[${CACHE_NAMESPACE}] No practice sessions found to cache. Full refresh finished.`
 					);
 					return;
 				}
@@ -169,6 +176,8 @@ export default defineHook(
 			}
 		};
 
+
+		// 1. 全量更新缓存
 		// Schedule to run every 30 minutes
 		schedule("*/30 * * * *", async () => {
 			logger.info(
@@ -185,7 +194,7 @@ export default defineHook(
 			await fetchAndCachePracticeSessionInfo();
 		});
 
-		// 增量更新缓存
+		// 2. 增量更新缓存
 		action("practice_sessions.items.create", async (meta, context) => {
 			logger.info(
                 `[${CACHE_NAMESPACE}] Practice session created (ID: ${meta.key}), updating cache.`
@@ -204,6 +213,7 @@ export default defineHook(
 		});
 
 		action("practice_sessions.items.delete", async (meta, context) => {
+			logger.info("delete meta", meta);
 			if (!Array.isArray(meta.payload)) return;
 			logger.info(
                 `[${CACHE_NAMESPACE}] Practice sessions deleted (IDs: ${meta.payload.join(", ")}), removing from cache.`
