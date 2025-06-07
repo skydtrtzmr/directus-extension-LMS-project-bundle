@@ -14,7 +14,7 @@ const redis = new IORedis(process.env.REDIS!, {
 
 export default defineHook(
 	(
-		{ init, schedule }: RegisterFunctions,
+		{ init, schedule, action }: RegisterFunctions,
 		hookContext: HookExtensionContext
 	) => {
 		const { services, getSchema, logger } = hookContext;
@@ -128,5 +128,13 @@ export default defineHook(
 			);
 			await fetchAndCachePracticeSessionInfo();
 		});
+
+		// TODO 这里需要改进
+		action("practice_sessions.items.create", async (meta, context) => {
+            logger.info(
+                "Practice session created, triggering info cache refresh."
+            );
+            await fetchAndCachePracticeSessionInfo();
+        });
 	}
 );

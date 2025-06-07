@@ -115,7 +115,7 @@ export default defineHook(
         // 注意，如果是用扩展创建的practice_sessions，需要专门写上emit才能触发这个钩子。
         action("practice_sessions.items.create", async (meta, context) => {
             logger.info(
-                "Practice session created, triggering cache refresh."
+                "Practice session created, triggering QResults cache refresh."
             );
             await fetchAndCachePracticeSessionResults();
         });

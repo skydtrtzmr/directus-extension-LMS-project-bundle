@@ -35,7 +35,7 @@ redis.on('error', (err) => {
 
 export default defineHook(
 	(
-		{ init, schedule }: RegisterFunctions,
+		{ init, schedule, action }: RegisterFunctions,
 		hookContext: HookExtensionContext
 	) => {
 		const { services, getSchema, logger } = hookContext;
@@ -190,5 +190,12 @@ export default defineHook(
 			);
 			await fetchAndCacheUserPracticeSessions();
 		});
+
+		action("practice_sessions.items.create", async (meta, context) => {
+            logger.info(
+                "Practice session created, triggering info cache refresh."
+            );
+            await fetchAndCacheUserPracticeSessions();
+        });
 	}
 );
