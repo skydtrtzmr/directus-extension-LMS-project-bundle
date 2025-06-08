@@ -19,7 +19,7 @@ export default defineHook(
         const { UsersService } = services;
 
         const cronSchedule =
-            process.env.USER_PS_CACHE_CRON_SCHEDULE || "*/30 * * * *";
+            process.env.USER_PS_CACHE_CRON_SCHEDULE || "*/60 * * * *";
         const INDEX_PREFIX = "user_email"; // Namespace for these keys
 
         const fetchAndCacheUserEmailList = async () => {
@@ -48,12 +48,12 @@ export default defineHook(
             );
         };
 
-        schedule(cronSchedule, async () => {
-            logger.info(
-                `[${INDEX_PREFIX}] Scheduled user email list cache refresh triggered by cron (${cronSchedule}).`
-            );
-            await fetchAndCacheUserEmailList();
-        });
+        // schedule(cronSchedule, async () => {
+        //     logger.info(
+        //         `[${INDEX_PREFIX}] Scheduled user email list cache refresh triggered by cron (${cronSchedule}).`
+        //     );
+        //     await fetchAndCacheUserEmailList();
+        // });
 
         // Run on application initialization (after app is ready)
         init("app.after", async () => {
