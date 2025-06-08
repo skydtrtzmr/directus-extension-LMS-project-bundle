@@ -229,12 +229,32 @@ export async function updateListCache(
 ): Promise<void> {
     const data = await fetchFunction();
     const resultArray: string[] = data.map((item) => item[field]);
-    console.log("resultArray:", resultArray);
 
-    redis.rpush(key, ...resultArray);
-    redis.expire(key, ttl).then((didSetExpire) => {
-        // console.log("Key has an expiration time set:", didSetExpire);
-    }); // 设置过期时间
+    if (resultArray.length === 0) {
+        // 如果没有获取到数据，可以选择清空旧的列表或者什么都不做
+        // 在这里我们选择清空，以保证数据的一致性
+        console.log(`[updateListCache] No data fetched for key '${key}'. Clearing existing list.`);
+        await redis.del(key);
+        return;
+    }
+
+    console.log(`[updateListCache] Fetched ${resultArray.length} items for key '${key}'. Updating cache...`);
+
+    // 使用pipeline来确保原子性操作：先删除旧列表，再添加新列表
+    const pipeline = redis.pipeline();
+    // 1. 删除旧的列表
+    pipeline.del(key);
+    // 2. 将所有新元素推入列表
+    pipeline.rpush(key, ...resultArray);
+    // 3. 设置过期时间
+    pipeline.expire(key, ttl);
+
+    try {
+        await pipeline.exec();
+        console.log(`[updateListCache] Successfully updated list '${key}' with ${resultArray.length} items and TTL ${ttl}s.`);
+    } catch (error) {
+        console.error(`[updateListCache] Error executing pipeline for list '${key}'.`, error);
+    }
 }
 
 // [2025-05-26] 新增函数：将嵌套数据列表的子项缓存为独立的Redis Hash
