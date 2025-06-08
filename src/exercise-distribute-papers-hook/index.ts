@@ -36,16 +36,15 @@ export default defineHook(({ filter }, { services, database, logger }) => {
 			
 			// --- 优化1：合并数据查询 ---
 			// 使用深度查询一次性获取所有需要的数据。
-			// 假设关系字段名为 'students' 和 'questions'，并使用(limit: -1)确保获取所有相关项。
 			const exerciseData = await exercisesService.readOne(exerciseId, {
 				fields: [
-					'students(limit: -1).id',
-					'paper.paper_sections(limit: -1).id',
-					'paper.paper_sections(limit: -1).points_per_question',
-					'paper.paper_sections(limit: -1).questions(limit: -1).id',
-					'paper.paper_sections(limit: -1).questions(limit: -1).questions_id.type',
-					'paper.paper_sections(limit: -1).questions(limit: -1).questions_id.correct_ans_select_radio',
-					'paper.paper_sections(limit: -1).questions(limit: -1).questions_id.correct_ans_select_multiple_checkbox',
+					'students.id',
+					'paper.paper_sections.id',
+					'paper.paper_sections.points_per_question',
+					'paper.paper_sections.questions.id',
+					'paper.paper_sections.questions.questions_id.type',
+					'paper.paper_sections.questions.questions_id.correct_ans_select_radio',
+					'paper.paper_sections.questions.questions_id.correct_ans_select_multiple_checkbox',
 				],
 			});
 			
