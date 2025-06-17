@@ -6,14 +6,15 @@ import { log } from 'console';
 // 根据课程，创建directus对应的书签。
 
 export default defineHook(({ filter, action }: RegisterFunctions, { services, getSchema }: HookExtensionContext) => {
-	filter('items.create', () => {
-		console.log('Creating Item!');
-	});
 
 	action('courses.items.create', handler);
 
 	async function handler(meta: Record<string, any>, context: EventContext) {
 		log('Creating Course Item!');
+		log("meta:");
+		log(meta);
+		log("context:");
+		log(context);
 		const { PresetsService } = services;
 
 		const presetService = new PresetsService({
@@ -23,7 +24,7 @@ export default defineHook(({ filter, action }: RegisterFunctions, { services, ge
 
 		const preset = await presetService.createOne({
 			bookmark: '这里是课程名称',
-			collection: 'paper_prototypes',
+			collection: 'papers',
 			layout: 'tabular',
 			layout_query: {"tabular":{"page":1}},
 			icon: 'bookmark'
