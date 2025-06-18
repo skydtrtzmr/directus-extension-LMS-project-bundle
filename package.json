@@ -31,6 +31,11 @@
 			},
 			{
 				"type": "hook",
+				"name": "exam-distribute-papers-hook",
+				"source": "src/exam-distribute-papers-hook/index.ts"
+			},
+			{
+				"type": "hook",
 				"name": "exercise-distribute-papers-hook",
 				"source": "src/exercise-distribute-papers-hook/index.ts"
 			},
