@@ -34,6 +34,8 @@ export default defineEndpoint({
                         // Using Directus logger
                         `Worker (job ${job.id}): Processing for questionId: ${id}`
                     );
+                    
+                    // 第一步：更新答案字段到数据库
                     const updatedItemKey = await itemsService.updateOne(id, {
                         submit_ans_select_radio: item.submit_ans_select_radio,
                         submit_ans_select_multiple_checkbox:
@@ -58,13 +60,133 @@ export default defineEndpoint({
                     }
 
                     logger.info(
-                        // Using Directus logger
                         `Worker (job ${job.id}): Successfully updated questionId: ${id}. Response:`,
                         updatedItemKey
                     );
+
+                    // 第二步：立即进行自动评分（在同一个事务中确保一致性）
+                    try {
+                        const questionResult = await itemsService.readOne(id, {
+                            fields: [
+                                "id",
+                                "question_type",
+                                "correct_ans_select_radio",
+                                "correct_ans_select_multiple_checkbox", 
+                                "submit_ans_select_radio",
+                                "submit_ans_select_multiple_checkbox",
+                                "point_value",
+                                "option_number",
+                                "practice_session_id",
+                            ],
+                        });
+
+                        if (!questionResult) {
+                            logger.warn(`Worker (job ${job.id}): 找不到答题记录: ${id}`);
+                            return; // 数据库更新成功，但无法读取完整记录，不影响主流程
+                        }
+
+                        // 计算得分逻辑（从automatic-grading-hook移植）
+                        let score = 0;
+                        const questionType = questionResult.question_type;
+
+                        if (
+                            questionType === "q_mc_single" ||
+                            questionType === "q_mc_binary"
+                        ) {
+                            // 单选题或二选题：必须完全匹配才得分
+                            if (
+                                questionResult.submit_ans_select_radio ===
+                                questionResult.correct_ans_select_radio
+                            ) {
+                                score = questionResult.point_value || 0;
+                            }
+                        } else if (
+                            questionType === "q_mc_multi" ||
+                            questionType === "q_mc_flexible"
+                        ) {
+                            // 多选题：完全匹配得满分，少选得部分分
+                            const submittedAnswers = questionResult.submit_ans_select_multiple_checkbox;
+                            const correctAnswers = questionResult.correct_ans_select_multiple_checkbox;
+
+                            // 如果答案是字符串，转换为数组进行比较
+                            const submittedArray = Array.isArray(submittedAnswers)
+                                ? submittedAnswers
+                                : JSON.parse(submittedAnswers || "[]");
+                            const correctArray = Array.isArray(correctAnswers)
+                                ? correctAnswers
+                                : JSON.parse(correctAnswers || "[]");
+
+                            // 检查是否有错选
+                            const hasWrongSelection = submittedArray.some(
+                                (answer: string) => !correctArray.includes(answer)
+                            );
+
+                            if (hasWrongSelection) {
+                                // 错选，得分为0
+                                score = 0;
+                            } else if (
+                                submittedArray.length === correctArray.length &&
+                                correctArray.every((answer: string) =>
+                                    submittedArray.includes(answer)
+                                )
+                            ) {
+                                // 完全匹配，得满分
+                                score = questionResult.point_value || 0;
+                            } else {
+                                // 少选，按比例得分
+                                const optionNumber =
+                                    questionResult.option_number || correctArray.length;
+                                const pointPerOption =
+                                    (questionResult.point_value || 0) / optionNumber;
+
+                                // 计算正确选择的数量
+                                const correctSelections = submittedArray.filter(
+                                    (answer: string) => correctArray.includes(answer)
+                                ).length;
+                                score = correctSelections * pointPerOption;
+                            }
+                        }
+
+                        // 第三步：更新分数到数据库
+                        const finalScore = Math.round(score * 100) / 100; // 保留两位小数
+                        await itemsService.updateOne(id, {
+                            score: finalScore
+                        });
+
+                        logger.info(
+                            `Worker (job ${job.id}): 完成自动判分: ID=${id}, 分数=${finalScore}, 类型=${questionType}`
+                        );
+
+                        // 第四步：同步更新Redis缓存中的分数
+                        try {
+                            const practiceSessionId = questionResult.practice_session_id;
+                            if (practiceSessionId) {
+                                const childRedisKey = `practice_session:${practiceSessionId}:qresult:${id.toString()}`;
+                                await connection.hset(childRedisKey, 'score', finalScore.toString());
+                                await connection.expire(childRedisKey, DEFAULT_CACHE_TTL);
+                                logger.info(
+                                    `Worker (job ${job.id}): Score updated in Redis cache for key: ${childRedisKey}`
+                                );
+                            }
+                        } catch (cacheError) {
+                            logger.error(
+                                `Worker (job ${job.id}): Failed to update score in Redis cache for questionId ${id}. Error:`,
+                                cacheError
+                            );
+                            // 缓存更新失败不影响主流程
+                        }
+
+                    } catch (gradingError) {
+                        logger.error(
+                            `Worker (job ${job.id}): 自动判分过程中出错 for questionId ${id}:`,
+                            gradingError
+                        );
+                        // 评分失败不影响答案提交的成功，但要记录错误以便后续处理
+                        throw new Error(`Grading failed for question ${id}: ${gradingError}`);
+                    }
+
                 } catch (error) {
                     logger.error(
-                        // Using Directus logger
                         `Worker (job ${job.id}): Error processing task for questionId: ${id}`,
                         error
                     );
@@ -74,13 +196,11 @@ export default defineEndpoint({
             {
                 connection,
                 concurrency: 5,
-                // 可以考虑增加并发数，例如: concurrency: 5
             }
         );
 
         worker.on("completed", (job) => {
             logger.info(
-                // Using Directus logger
                 `Worker: Job ${job.id} (questionId: ${job.data?.id}) has completed!`
             );
         });
@@ -92,30 +212,26 @@ export default defineEndpoint({
                 "Directus context not available yet, retrying task."
             ) {
                 logger.error(
-                    // Using Directus logger
                     `Worker: Job ${job?.id} (questionId: ${job?.data?.id}) has failed after retries with error: ${err.message}`
                 );
             } else {
                 // 可以选择在这里记录一个更轻量级的日志，或者不记录，因为 BullMQ 会处理重试
                 logger.warn(
-                    // Using Directus logger
                     `Worker: Job ${job?.id} failed because Directus context was not ready, BullMQ will retry.`
                 );
             }
         });
         logger.info(
-            // Using Directus logger
             "Directus Endpoint Initialized: Services and getSchema are now available for the worker."
         );
 
         // API 端点用于接收任务，并添加到队列
         router.post("/question_result", async (req, res) => {
             const data = req.body;
-            logger.info("Endpoint: /question_result received data."); // Using Directus logger
+            logger.info("Endpoint: /question_result received data.");
 
             if (!data.collection || !data.id || !data.item) {
                 logger.warn(
-                    // Using Directus logger
                     "Endpoint: /question_result received invalid data:",
                     data
                 );
@@ -146,7 +262,6 @@ export default defineEndpoint({
                             )
                         ) {
                             const value = questionResultItem[key];
-                            // itemToCache[key] = value;
                             if (value === null || value === undefined) {
                                 itemToCache[key] = "";
                             } else if (typeof value === "object") {
@@ -154,7 +269,7 @@ export default defineEndpoint({
                                 itemToCache[key] = JSON.stringify(value);
                             } else {
                                 // Covers string, number, boolean, bigint, symbol
-                                itemToCache[key] = String(value);;
+                                itemToCache[key] = String(value);
                             }
                         }
                     }
@@ -203,26 +318,22 @@ export default defineEndpoint({
                     },
                 });
                 logger.info(
-                    // Using Directus logger
                     `Endpoint: Job for questionId ${data.id} added to queue.`
                 );
                 res.send({
                     message:
-                        "Question result received, cached, and queued for DB processing.",
+                        "Question result received, cached, and queued for DB processing with automatic grading.",
                     received_data: data,
                 });
             } catch (e: any) {
-                logger.error("Endpoint: Failed to add job to queue", e); // Using Directus logger
+                logger.error("Endpoint: Failed to add job to queue", e);
                 res.status(500).send({ error: "Failed to queue the request." });
             }
-
-            // router.post handlers in Directus don't need to return true explicitly.
-            // Sending a response with res.send() or res.status().json() is sufficient.
         });
 
         // 可选：添加一个简单的 GET 路由用于测试 Endpoint 是否加载
         router.get("/", (_req, res) =>
-            res.send("Question Results Processor Endpoint is active.")
+            res.send("Question Results Processor Endpoint with Automatic Grading is active.")
         );
     },
 });

@@ -30,9 +30,10 @@ export default defineEndpoint({
                 const { collection, id, item } = job.data; // collection is not used here but good for context
                 try {
                     logger.info(
-                        // Using Directus logger
                         `Worker (job ${job.id}): Processing for questionId: ${id}`
                     );
+                    
+                    // 第一步：更新答案字段到数据库
                     const updatedItemKey = await itemsService.updateOne(id, {
                         submit_ans_select_radio: item.submit_ans_select_radio,
                         submit_ans_select_multiple_checkbox:
@@ -46,7 +47,6 @@ export default defineEndpoint({
                     // 在 BullMQ 的 Worker 中，只要在 async (job) => { ... } 这个处理函数内部向上抛出了一个未被捕获的错误 (error)，BullMQ 就会将该 job 的当前尝试判定为失败 (failed)。
                     if (!updatedItemKey) {
                         logger.error(
-                            // Using Directus logger
                             `Worker (job ${job.id}): Update for questionId: ${id} returned an unexpected null or empty response. Considering it as a failure.`
                         );
                         throw new Error(
@@ -55,14 +55,134 @@ export default defineEndpoint({
                     }
 
                     logger.info(
-                        // Using Directus logger
                         `Worker (job ${job.id}): Successfully updated questionId: ${id}. Response:`,
                         updatedItemKey
                     );
+
+                    // 第二步：立即进行自动评分（在同一个事务中确保一致性）
+                    try {
+                        const questionResult = await itemsService.readOne(id, {
+                            fields: [
+                                "id",
+                                "question_type",
+                                "correct_ans_select_radio",
+                                "correct_ans_select_multiple_checkbox", 
+                                "submit_ans_select_radio",
+                                "submit_ans_select_multiple_checkbox",
+                                "point_value",
+                                "option_number",
+                                "exam_session_id", // 考试会话ID
+                            ],
+                        });
+
+                        if (!questionResult) {
+                            logger.warn(`Worker (job ${job.id}): 找不到答题记录: ${id}`);
+                            return; // 数据库更新成功，但无法读取完整记录，不影响主流程
+                        }
+
+                        // 计算得分逻辑（从automatic-grading-hook移植）
+                        let score = 0;
+                        const questionType = questionResult.question_type;
+
+                        if (
+                            questionType === "q_mc_single" ||
+                            questionType === "q_mc_binary"
+                        ) {
+                            // 单选题或二选题：必须完全匹配才得分
+                            if (
+                                questionResult.submit_ans_select_radio ===
+                                questionResult.correct_ans_select_radio
+                            ) {
+                                score = questionResult.point_value || 0;
+                            }
+                        } else if (
+                            questionType === "q_mc_multi" ||
+                            questionType === "q_mc_flexible"
+                        ) {
+                            // 多选题：完全匹配得满分，少选得部分分
+                            const submittedAnswers = questionResult.submit_ans_select_multiple_checkbox;
+                            const correctAnswers = questionResult.correct_ans_select_multiple_checkbox;
+
+                            // 如果答案是字符串，转换为数组进行比较
+                            const submittedArray = Array.isArray(submittedAnswers)
+                                ? submittedAnswers
+                                : JSON.parse(submittedAnswers || "[]");
+                            const correctArray = Array.isArray(correctAnswers)
+                                ? correctAnswers
+                                : JSON.parse(correctAnswers || "[]");
+
+                            // 检查是否有错选
+                            const hasWrongSelection = submittedArray.some(
+                                (answer: string) => !correctArray.includes(answer)
+                            );
+
+                            if (hasWrongSelection) {
+                                // 错选，得分为0
+                                score = 0;
+                            } else if (
+                                submittedArray.length === correctArray.length &&
+                                correctArray.every((answer: string) =>
+                                    submittedArray.includes(answer)
+                                )
+                            ) {
+                                // 完全匹配，得满分
+                                score = questionResult.point_value || 0;
+                            } else {
+                                // 少选，按比例得分
+                                const optionNumber =
+                                    questionResult.option_number || correctArray.length;
+                                const pointPerOption =
+                                    (questionResult.point_value || 0) / optionNumber;
+
+                                // 计算正确选择的数量
+                                const correctSelections = submittedArray.filter(
+                                    (answer: string) => correctArray.includes(answer)
+                                ).length;
+                                score = correctSelections * pointPerOption;
+                            }
+                        }
+
+                        // 第三步：更新分数到数据库
+                        const finalScore = Math.round(score * 100) / 100; // 保留两位小数
+                        await itemsService.updateOne(id, {
+                            score: finalScore
+                        });
+
+                        logger.info(
+                            `Worker (job ${job.id}): 完成考试自动判分: ID=${id}, 分数=${finalScore}, 类型=${questionType}`
+                        );
+
+                        // 第四步：同步更新Redis缓存中的分数（考试会话）
+                        try {
+                            const examSessionId = questionResult.exam_session_id;
+                            if (examSessionId) {
+                                const childRedisKey = `exam_session:${examSessionId}:qresult:${id.toString()}`;
+                                await connection.hset(childRedisKey, 'score', finalScore.toString());
+                                await connection.expire(childRedisKey, DEFAULT_CACHE_TTL);
+                                logger.info(
+                                    `Worker (job ${job.id}): Score updated in Redis cache for exam key: ${childRedisKey}`
+                                );
+                            }
+                        } catch (cacheError) {
+                            logger.error(
+                                `Worker (job ${job.id}): Failed to update score in Redis cache for questionId ${id}. Error:`,
+                                cacheError
+                            );
+                            // 缓存更新失败不影响主流程
+                        }
+
+                    } catch (gradingError) {
+                        logger.error(
+                            `Worker (job ${job.id}): 考试自动判分过程中出错 for questionId ${id}:`,
+                            gradingError
+                        );
+                        // 评分失败不影响答案提交的成功，但要记录错误以便后续处理
+                        throw new Error(`Exam grading failed for question ${id}: ${gradingError}`);
+                    }
+
                 } catch (error) {
                     logger.error(
-                        // Using Directus logger
-                        `Worker (job ${job.id}): Error processing task for questionId: ${id}`,
+                        `Worker (job ${job.id}): Error processing exam task for questionId: ${id}`,
                         error
                     );
                     throw error; // 确保错误向上抛出，以便 BullMQ 知道任务失败并根据配置处理
@@ -71,14 +191,12 @@ export default defineEndpoint({
             {
                 connection,
                 concurrency: 5,
-                // 可以考虑增加并发数，例如: concurrency: 5
             }
         );
 
         worker.on("completed", (job) => {
             logger.info(
-                // Using Directus logger
-                `Worker: Job ${job.id} (questionId: ${job.data?.id}) has completed!`
+                `Worker: Exam Job ${job.id} (questionId: ${job.data?.id}) has completed!`
             );
         });
 
@@ -89,31 +207,27 @@ export default defineEndpoint({
                 "Directus context not available yet, retrying task."
             ) {
                 logger.error(
-                    // Using Directus logger
-                    `Worker: Job ${job?.id} (questionId: ${job?.data?.id}) has failed after retries with error: ${err.message}`
+                    `Worker: Exam Job ${job?.id} (questionId: ${job?.data?.id}) has failed after retries with error: ${err.message}`
                 );
             } else {
                 // 可以选择在这里记录一个更轻量级的日志，或者不记录，因为 BullMQ 会处理重试
                 logger.warn(
-                    // Using Directus logger
-                    `Worker: Job ${job?.id} failed because Directus context was not ready, BullMQ will retry.`
+                    `Worker: Exam Job ${job?.id} failed because Directus context was not ready, BullMQ will retry.`
                 );
             }
         });
         logger.info(
-            // Using Directus logger
-            "Directus Endpoint Initialized: Services and getSchema are now available for the worker."
+            "Directus Exam Endpoint Initialized: Services and getSchema are now available for the worker."
         );
 
         // API 端点用于接收任务，并添加到队列
         router.post("/question_result", async (req, res) => {
             const data = req.body;
-            logger.info("Endpoint: /question_result received data."); // Using Directus logger
+            logger.info("Endpoint: /exam_question_result received data.");
 
             if (!data.collection || !data.id || !data.item) {
                 logger.warn(
-                    // Using Directus logger
-                    "Endpoint: /question_result received invalid data:",
+                    "Endpoint: /exam_question_result received invalid data:",
                     data
                 );
                 return res.status(400).send({
@@ -123,16 +237,14 @@ export default defineEndpoint({
 
             // --- 开始：直接写入 Redis 缓存 ---
             try {
-                const questionResultItem = data.item; // This is the object with fields to update/set
+                const questionResultItem = data.item;
+                const questionResultId = data.id;
+                const examSessionId = questionResultItem.exam_session_id;
 
-                const questionResultId = data.id; // ID of the question_result item itself
-                const examStudentId = questionResultItem.exam_student;
-
-                if (examStudentId && questionResultId) {
-                    const childRedisKey = `exam_session:${examStudentId}:qresult:${questionResultId.toString()}`;
+                if (examSessionId && questionResultId) {
+                    const childRedisKey = `exam_session:${examSessionId}:qresult:${questionResultId.toString()}`;
 
                     // 将 questionResultItem 对象转换为 { [key: string]: string } 形式以用于 hmset
-                    // 确保所有值都是字符串，null 或 undefined 的值转换为空字符串
                     const itemToCache: { [key: string]: string } = {};
                     for (const key in questionResultItem) {
                         if (
@@ -145,45 +257,36 @@ export default defineEndpoint({
                             if (value === null || value === undefined) {
                                 itemToCache[key] = "";
                             } else if (typeof value === "object") {
-                                // Covers arrays and plain objects
                                 itemToCache[key] = JSON.stringify(value);
                             } else {
-                                // Covers string, number, boolean, bigint, symbol
-                                itemToCache[key] = String(value);;
+                                itemToCache[key] = String(value);
                             }
                         }
                     }
 
                     if (Object.keys(itemToCache).length > 0) {
                         await connection.hmset(childRedisKey, itemToCache);
-                        await connection.expire(
-                            childRedisKey,
-                            DEFAULT_CACHE_TTL
-                        );
+                        await connection.expire(childRedisKey, DEFAULT_CACHE_TTL);
                         logger.info(
-                            `Endpoint: Question result ${questionResultId} for exam session ${examStudentId} directly written/updated in Redis cache (Key: ${childRedisKey}). Fields updated: ${Object.keys(
+                            `Endpoint: Exam question result ${questionResultId} for session ${examSessionId} directly written/updated in Redis cache (Key: ${childRedisKey}). Fields updated: ${Object.keys(
                                 itemToCache
                             ).join(", ")}`
                         );
                     } else {
                         logger.warn(
-                            `Endpoint: /question_result payload for ID ${questionResultId}, exam session ${examStudentId} resulted in an empty item map. Skipping direct Redis cache update. Data:`,
-                            data
+                            `Endpoint: /exam_question_result payload for ID ${questionResultId}, session ${examSessionId} resulted in an empty item map. Skipping direct Redis cache update.`
                         );
                     }
                 } else {
                     logger.warn(
-                        `Endpoint: /question_result payload for ID ${data.id} is missing exam_student in item data or questionResultId is missing. Skipping direct Redis cache update. Data:`,
-                        data
+                        `Endpoint: /exam_question_result payload for ID ${data.id} is missing exam_session_id in item data. Skipping direct Redis cache update.`
                     );
                 }
             } catch (cacheError) {
                 logger.error(
-                    `Endpoint: Failed to write to Redis cache for questionId ${data.id}. Error:`,
+                    `Endpoint: Failed to write to Redis cache for exam questionId ${data.id}. Error:`,
                     cacheError
                 );
-                // 缓存写入失败，但我们仍然继续将任务添加到队列
-                // 这样可以保证数据最终会写入数据库，并在下一次全量缓存刷新时更新到缓存
             }
             // --- 结束：直接写入 Redis 缓存 ---
 
@@ -198,26 +301,22 @@ export default defineEndpoint({
                     },
                 });
                 logger.info(
-                    // Using Directus logger
-                    `Endpoint: Job for questionId ${data.id} added to queue.`
+                    `Endpoint: Exam Job for questionId ${data.id} added to queue.`
                 );
                 res.send({
                     message:
-                        "Question result received, cached, and queued for DB processing.",
+                        "Exam question result received, cached, and queued for DB processing with automatic grading.",
                     received_data: data,
                 });
             } catch (e: any) {
-                logger.error("Endpoint: Failed to add job to queue", e); // Using Directus logger
-                res.status(500).send({ error: "Failed to queue the request." });
+                logger.error("Endpoint: Failed to add exam job to queue", e);
+                res.status(500).send({ error: "Failed to queue the exam request." });
             }
-
-            // router.post handlers in Directus don't need to return true explicitly.
-            // Sending a response with res.send() or res.status().json() is sufficient.
         });
 
         // 可选：添加一个简单的 GET 路由用于测试 Endpoint 是否加载
         router.get("/", (_req, res) =>
-            res.send("Exam Question Results Processor Endpoint is active.")
+            res.send("Exam Question Results Processor Endpoint with Automatic Grading is active.")
         );
     },
 }); 

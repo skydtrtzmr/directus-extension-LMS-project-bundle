@@ -3,7 +3,7 @@ import { defineHook } from "@directus/extensions-sdk";
 export default defineHook(({ filter }, { services, logger }) => {
     const { ItemsService } = services;
 
-    // 监听 question_results 的更新事件
+    // 监听 question_results 的更新事件 - 现在作为备份评分机制
     filter(
         "question_results.items.update",
         async (payload: any, meta: any, context: any) => {
@@ -15,6 +15,14 @@ export default defineHook(({ filter }, { services, logger }) => {
 
             // 如果没有提交答案，就不进行判分
             if (!hasRadioAnswer && !hasCheckboxAnswer) {
+                return payload;
+            }
+
+            // ⚠️ 重要变更：只有在分数字段缺失或为null时才进行评分
+            // 这样可以避免与消息队列的评分逻辑冲突，仅作为备份机制
+            const hasExistingScore = payload && ("score" in payload && payload.score != null);
+            if (hasExistingScore) {
+                logger.info("自动评分钩子：分数已存在，跳过评分（由消息队列处理）");
                 return payload;
             }
 
@@ -48,6 +56,7 @@ export default defineHook(({ filter }, { services, logger }) => {
                             "submit_ans_select_multiple_checkbox",
                             "point_value",
                             "option_number",
+                            "score", // 检查现有分数
                         ],
                     }
                 );
@@ -55,6 +64,12 @@ export default defineHook(({ filter }, { services, logger }) => {
                 // 如果找不到记录，则返回原始payload
                 if (!questionResult) {
                     logger.warn(`找不到答题记录: ${questionResultId}`);
+                    return payload;
+                }
+
+                // 再次检查是否已有分数（数据库中的分数）
+                if (questionResult.score != null && questionResult.score !== 0) {
+                    logger.info(`备份评分钩子：题目 ${questionResultId} 已有分数 ${questionResult.score}，跳过评分`);
                     return payload;
                 }
 
@@ -133,14 +148,14 @@ export default defineHook(({ filter }, { services, logger }) => {
                 payload.score = Math.round(score * 100) / 100; // 保留两位小数
 
                 logger.info(
-                    `完成自动判分: ID=${questionResultId}, 分数=${payload.score}, 类型=${questionType}`
+                    `备份评分机制完成自动判分: ID=${questionResultId}, 分数=${payload.score}, 类型=${questionType}`
                 );
 
                 return payload;
             } catch (error: unknown) {
                 const errorMessage =
                     error instanceof Error ? error.message : "未知错误";
-                logger.error(`自动判分过程中出错: ${errorMessage}`);
+                logger.error(`备份评分机制 - 自动判分过程中出错: ${errorMessage}`);
                 return payload;
             }
         }
@@ -189,6 +204,10 @@ export default defineHook(({ filter }, { services, logger }) => {
 
             // 将总分写入更新 payload
             payload.score = Math.round(totalScore * 100) / 100;
+
+            logger.info(
+                `练习会话 ${practiceSessionId} 总分计算完成: ${payload.score} (基于 ${results.length} 个题目)`
+            );
 
             return payload;
         }
