@@ -442,6 +442,7 @@ export async function setFlattenedObjectToHash(
     } catch (error) {
         console.error(`[FlattenedCache] Hash key '${hashKey}': Error executing Redis pipeline. Error:`, error);
     }
+
 }
 
 /**
