@@ -13,6 +13,13 @@ export default defineHook(({ filter, action }: RegisterFunctions, { services, ge
 		log('Creating Course Item!');
 		log("meta:");
 		log(meta);
+		// meta:
+		// {
+		// 	event: 'courses.items.create',
+		// 	payload: { name: '英语' },
+		// 	key: 'c1f2803c-b638-4be5-8289-a556b072c38e',
+		// 	collection: 'courses'
+		//   }
 		log("context:");
 		log(context);
 		const { PresetsService } = services;
@@ -23,7 +30,7 @@ export default defineHook(({ filter, action }: RegisterFunctions, { services, ge
 		});
 
 		const preset = await presetService.createOne({
-			bookmark: '这里是课程名称',
+			bookmark: meta.payload.name,
 			collection: 'papers',
 			layout: 'tabular',
 			layout_query: {"tabular":{"page":1}},

@@ -108,6 +108,46 @@
 				"type": "endpoint",
 				"name": "fetch-user-email-list-pop-endpoint",
 				"source": "src/fetch-user-email-list-pop-endpoint/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "fetch-exam-session-cache-endpoint",
+				"source": "src/fetch-exam-session-cache-endpoint/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "fetch-exam-session-info-endpoint",
+				"source": "src/fetch-exam-session-info-endpoint/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "fetch-user-es-cache-endpoint",
+				"source": "src/fetch-user-es-cache-endpoint/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "exam-question-results-submit-queue-endpoint",
+				"source": "src/exam-question-results-submit-queue-endpoint/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "set-exam-session-info-cache-hook",
+				"source": "src/set-exam-session-info-cache-hook/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "set-exam-session-qresults-cache-hook",
+				"source": "src/set-exam-session-qresults-cache-hook/index.ts"
+			},
+			{
+				"type": "hook",
+				"name": "set-user-es-cache-hook",
+				"source": "src/set-user-es-cache-hook/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "update-exam-session-info-endpoint",
+				"source": "src/update-exam-session-info-endpoint/index.ts"
 			}
 		],
 		"host": "^10.10.0"
