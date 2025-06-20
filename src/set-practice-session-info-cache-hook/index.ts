@@ -195,12 +195,12 @@ export default defineHook(
 		});
 
 		// 2. 增量更新缓存
-		// action("practice_sessions.items.create", async (meta, context) => {
-		// 	logger.info(
-        //         `[${CACHE_NAMESPACE}] Practice session created (ID: ${meta.key}), updating cache.`
-        //     );
-		// 	await updateSingleSessionInCache(meta.key);
-		// });
+		action("practice_sessions.items.create", async (meta, context) => {
+			logger.info(
+                `[${CACHE_NAMESPACE}] Practice session created (ID: ${meta.key}), updating cache.`
+            );
+			await updateSingleSessionInCache(meta.key);
+		});
 
 		action("practice_sessions.items.update", async (meta, context) => {
 			logger.info("update meta", meta);
