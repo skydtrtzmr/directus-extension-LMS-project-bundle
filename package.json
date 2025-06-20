@@ -148,6 +148,11 @@
 				"type": "endpoint",
 				"name": "update-exam-session-info-endpoint",
 				"source": "src/update-exam-session-info-endpoint/index.ts"
+			},
+			{
+				"type": "endpoint",
+				"name": "recalculate-practice-session-score-endpoint",
+				"source": "src/recalculate-practice-session-score-endpoint/index.ts"
 			}
 		],
 		"host": "^10.10.0"
