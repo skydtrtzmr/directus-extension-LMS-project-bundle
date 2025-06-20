@@ -194,13 +194,79 @@ export default defineHook(
 			await fetchAndCacheUserPracticeSessions();
 		});
 
-		// action("practice_sessions.items.create", async (meta, context) => {
-        //     logger.info(
-        //         "Practice session created, triggering info cache refresh."
-        //     );
-        //     await fetchAndCacheUserPracticeSessions();
-        // });
+		// 增量更新单个用户的练习会话缓存
+		const addPracticeSessionToUserCache = async (practiceSessionId: string, userId: string) => {
+			if (!practiceSessionId || !userId) {
+				logger.warn(`[${REVERSE_INDEX_PREFIX}] 无效的参数: practiceSessionId=${practiceSessionId}, userId=${userId}`);
+				return;
+			}
 
-		// TODO 暂时注释掉了，不然分发时间的时候会疯狂触发。
+			try {
+				const userIndexKey = `${REVERSE_INDEX_PREFIX}:${userId}`;
+				
+				// 使用 SADD 添加新的 practice_session_id 到用户的集合中
+				// SADD 是幂等的，重复添加相同元素不会有问题
+				await redis.sadd(userIndexKey, practiceSessionId);
+				
+				// 更新过期时间
+				await redis.expire(userIndexKey, CACHE_TTL_SECONDS);
+				
+				logger.info(`[${REVERSE_INDEX_PREFIX}] 成功为用户 ${userId} 添加练习会话 ${practiceSessionId} 到缓存`);
+			} catch (error) {
+				logger.error(error, `[${REVERSE_INDEX_PREFIX}] 为用户 ${userId} 添加练习会话 ${practiceSessionId} 到缓存时出错:`);
+			}
+		};
+
+		// 监听练习会话创建事件，实时更新用户缓存
+		action("practice_sessions.items.create", async (meta, context) => {
+			logger.info(`[${REVERSE_INDEX_PREFIX}] 检测到练习会话创建事件，开始处理缓存更新`);
+
+			try {
+				// 获取创建的练习会话ID
+				const practiceSessionId = meta.key;
+				if (!practiceSessionId) {
+					logger.warn(`[${REVERSE_INDEX_PREFIX}] 无法获取练习会话ID`);
+					return;
+				}
+
+				// 获取完整的练习会话数据以提取用户ID
+				const { accountability, schema } = context;
+				const practiceSessionsService = new ItemsService(PRACTICE_SESSION_COLLECTION, {
+					schema,
+					accountability,
+				});
+
+				const practiceSessionData = await practiceSessionsService.readOne(practiceSessionId, {
+					fields: ["id", "exercises_students_id.students_id.directus_user"],
+				});
+
+				if (!practiceSessionData) {
+					logger.warn(`[${REVERSE_INDEX_PREFIX}] 无法读取练习会话 ${practiceSessionId} 的数据`);
+					return;
+				}
+
+				// 提取用户ID
+				const esLink = practiceSessionData.exercises_students_id;
+				let directusUserId: string | null = null;
+
+				if (Array.isArray(esLink) && esLink.length > 0) {
+					// 如果是数组，取第一个（通常应该只有一个）
+					directusUserId = esLink[0]?.students_id?.directus_user;
+				} else if (esLink && typeof esLink === 'object') {
+					// 如果是单个对象
+					directusUserId = esLink.students_id?.directus_user;
+				}
+
+				if (directusUserId) {
+					// 增量添加到用户缓存
+					await addPracticeSessionToUserCache(String(practiceSessionId), directusUserId);
+				} else {
+					logger.warn(`[${REVERSE_INDEX_PREFIX}] 练习会话 ${practiceSessionId} 无法找到关联的用户ID`);
+				}
+
+			} catch (error) {
+				logger.error(error, `[${REVERSE_INDEX_PREFIX}] 处理练习会话创建事件时出错:`);
+			}
+		});
 	}
 );
