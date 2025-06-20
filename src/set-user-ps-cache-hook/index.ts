@@ -38,7 +38,7 @@ redis.on('error', (err) => {
 
 export default defineHook(
 	(
-		{ init, schedule, action }: RegisterFunctions,
+		{ init, schedule, action, filter }: RegisterFunctions,
 		hookContext: HookExtensionContext
 	) => {
 		const { services, getSchema, logger } = hookContext;
@@ -217,6 +217,31 @@ export default defineHook(
 			}
 		};
 
+		// 从用户缓存中移除练习会话
+		const removePracticeSessionFromUserCache = async (practiceSessionId: string, userId: string) => {
+			if (!practiceSessionId || !userId) {
+				logger.warn(`[${REVERSE_INDEX_PREFIX}] 无效的参数: practiceSessionId=${practiceSessionId}, userId=${userId}`);
+				return;
+			}
+
+			try {
+				const userIndexKey = `${REVERSE_INDEX_PREFIX}:${userId}`;
+				
+				// 使用 SREM 从用户的集合中移除 practice_session_id
+				const removed = await redis.srem(userIndexKey, practiceSessionId);
+				
+				if (removed > 0) {
+					// 更新过期时间
+					await redis.expire(userIndexKey, CACHE_TTL_SECONDS);
+					logger.info(`[${REVERSE_INDEX_PREFIX}] 成功为用户 ${userId} 从缓存中移除练习会话 ${practiceSessionId}`);
+				} else {
+					logger.info(`[${REVERSE_INDEX_PREFIX}] 用户 ${userId} 的缓存中不存在练习会话 ${practiceSessionId}`);
+				}
+			} catch (error) {
+				logger.error(error, `[${REVERSE_INDEX_PREFIX}] 为用户 ${userId} 从缓存中移除练习会话 ${practiceSessionId} 时出错:`);
+			}
+		};
+
 		// 监听练习会话创建事件，实时更新用户缓存
 		action("practice_sessions.items.create", async (meta, context) => {
 			logger.info(`[${REVERSE_INDEX_PREFIX}] 检测到练习会话创建事件，开始处理缓存更新`);
@@ -266,6 +291,110 @@ export default defineHook(
 
 			} catch (error) {
 				logger.error(error, `[${REVERSE_INDEX_PREFIX}] 处理练习会话创建事件时出错:`);
+			}
+		});
+
+		// 存储要删除的练习会话ID，供后续清理缓存使用
+		let practiceSessionsToDelete: (string | number)[] = [];
+
+		// 监听练习删除事件，在删除前获取相关数据（因为删除practice_sessions是级联的）
+		filter("exercises.items.delete", async (payload: any, meta: any, context: any) => {
+			logger.info(`[${REVERSE_INDEX_PREFIX}] 检测到练习删除事件，准备获取相关练习会话数据`);
+
+			try {
+				// payload 包含要删除的练习ID数组
+				const deletedExerciseIds = payload;
+				if (!Array.isArray(deletedExerciseIds) || deletedExerciseIds.length === 0) {
+					logger.warn(`[${REVERSE_INDEX_PREFIX}] 无法获取被删除的练习ID列表`);
+					return payload;
+				}
+
+				logger.info(`[${REVERSE_INDEX_PREFIX}] 处理删除的练习ID: ${deletedExerciseIds.join(", ")}`);
+
+				// 在删除之前，先查询这些练习对应的practice_sessions
+				const { accountability, schema } = context;
+				const practiceSessionsService = new ItemsService(PRACTICE_SESSION_COLLECTION, {
+					schema,
+					accountability,
+				});
+
+				// 查询所有相关的practice_sessions并存储
+				try {
+					const relatedPracticeSessions = await practiceSessionsService.readByQuery({
+						fields: ["id"],
+						filter: {
+							'exercises_students_id': {
+								'exercises_id': {
+									'_in': deletedExerciseIds
+								}
+							}
+						},
+						limit: -1
+					});
+
+					practiceSessionsToDelete = relatedPracticeSessions.map((session: any) => session.id);
+					logger.info(`[${REVERSE_INDEX_PREFIX}] 找到 ${practiceSessionsToDelete.length} 个相关的练习会话需要从缓存中移除`);
+				} catch (queryError) {
+					logger.error(queryError, `[${REVERSE_INDEX_PREFIX}] 查询相关练习会话时出错:`);
+					practiceSessionsToDelete = [];
+				}
+
+			} catch (error) {
+				logger.error(error, `[${REVERSE_INDEX_PREFIX}] 处理练习删除filter事件时出错:`);
+			}
+
+			return payload; // 必须返回payload让删除操作继续
+		});
+
+		// 在删除完成后清理缓存
+		action("exercises.items.delete", async (meta: any, context: any) => {
+			logger.info(`[${REVERSE_INDEX_PREFIX}] 练习删除完成，开始清理缓存`);
+
+			try {
+				if (practiceSessionsToDelete.length === 0) {
+					logger.info(`[${REVERSE_INDEX_PREFIX}] 没有相关的练习会话需要清理缓存`);
+					return;
+				}
+
+				// 从所有用户的缓存中移除这些practice_session_id
+				const pattern = `${REVERSE_INDEX_PREFIX}:*`;
+				const userCacheKeys = await redis.keys(pattern);
+
+				if (userCacheKeys.length === 0) {
+					logger.info(`[${REVERSE_INDEX_PREFIX}] 没有找到用户缓存，无需清理`);
+					return;
+				}
+
+				let totalRemoved = 0;
+				const pipeline = redis.pipeline();
+
+				for (const userCacheKey of userCacheKeys) {
+					for (const practiceSessionId of practiceSessionsToDelete) {
+						// 批量移除操作
+						pipeline.srem(userCacheKey, String(practiceSessionId));
+					}
+				}
+
+				const results = await pipeline.exec();
+				
+				// 统计实际移除的数量
+				if (results) {
+					results.forEach((result) => {
+						if (result && result[1] && typeof result[1] === 'number') {
+							totalRemoved += result[1];
+						}
+					});
+				}
+
+				logger.info(`[${REVERSE_INDEX_PREFIX}] 从用户缓存中总共移除了 ${totalRemoved} 个练习会话引用`);
+
+				// 清理临时存储
+				practiceSessionsToDelete = [];
+
+			} catch (error) {
+				logger.error(error, `[${REVERSE_INDEX_PREFIX}] 清理缓存时出错:`);
+				// 清理临时存储
+				practiceSessionsToDelete = [];
 			}
 		});
 	}

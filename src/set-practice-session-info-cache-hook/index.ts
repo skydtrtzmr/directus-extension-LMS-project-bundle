@@ -14,7 +14,7 @@ const redis = new IORedis(process.env.REDIS!, {
 
 export default defineHook(
 	(
-		{ init, schedule, action }: RegisterFunctions,
+		{ init, schedule, action, filter }: RegisterFunctions,
 		hookContext: HookExtensionContext
 	) => {
 		const { services, getSchema, logger } = hookContext;
@@ -213,17 +213,76 @@ export default defineHook(
 			}
 		});
 
-		// [2025-06-07] 注意，item事件没法监控到关联字段的级联删除。
-		// 比如，删除一个练习会话，会级联删除关联的练习结果。
-		// 但是，item事件没法监控到这个级联删除。
-		// 所以，我们需要使用collection事件来监控这个级联删除。
-		action("practice_sessions.items.delete", async (meta, context) => {
-			logger.info("delete meta", meta);
-			if (!Array.isArray(meta.payload)) return;
-			logger.info(
-                `[${CACHE_NAMESPACE}] Practice sessions deleted (IDs: ${meta.payload.join(", ")}), removing from cache.`
-            );
-			await deleteSessionsFromCache(meta.payload);
+		// 存储要删除的练习会话ID，供后续清理缓存使用
+		let practiceSessionsToDelete: (string | number)[] = [];
+
+		// 监听练习删除事件，在删除前获取相关数据（因为删除practice_sessions是级联的）
+		filter("exercises.items.delete", async (payload: any, meta: any, context: any) => {
+			logger.info(`[${CACHE_NAMESPACE}] Exercise deletion detected, preparing to get related practice session data.`);
+			
+			try {
+				const deletedExerciseIds = payload;
+				if (!Array.isArray(deletedExerciseIds) || deletedExerciseIds.length === 0) {
+					logger.warn(`[${CACHE_NAMESPACE}] No exercise IDs found in deletion event.`);
+					return payload;
+				}
+
+				logger.info(`[${CACHE_NAMESPACE}] Processing deleted exercise IDs: ${deletedExerciseIds.join(", ")}`);
+
+				// 查询这些练习对应的practice_sessions并存储
+				const { accountability, schema } = context;
+				const practiceSessionsService = new ItemsService(
+					PRACTICE_SESSION_COLLECTION,
+					{ schema, accountability }
+				);
+
+				try {
+					const relatedPracticeSessions = await practiceSessionsService.readByQuery({
+						fields: ["id"],
+						filter: {
+							'exercises_students_id': {
+								'exercises_id': {
+									'_in': deletedExerciseIds
+								}
+							}
+						},
+						limit: -1
+					});
+
+					practiceSessionsToDelete = relatedPracticeSessions.map((session: any) => session.id);
+					logger.info(`[${CACHE_NAMESPACE}] Found ${practiceSessionsToDelete.length} related practice sessions to remove from cache.`);
+				} catch (queryError) {
+					logger.error(queryError, `[${CACHE_NAMESPACE}] Error querying related practice sessions:`);
+					practiceSessionsToDelete = [];
+				}
+
+			} catch (error) {
+				logger.error(error, `[${CACHE_NAMESPACE}] Error handling exercise deletion filter event:`);
+			}
+
+			return payload; // 必须返回payload让删除操作继续
+		});
+
+		// 在删除完成后清理缓存
+		action("exercises.items.delete", async (meta: any, context: any) => {
+			logger.info(`[${CACHE_NAMESPACE}] Exercise deletion completed, cleaning cache.`);
+
+			try {
+				if (practiceSessionsToDelete.length === 0) {
+					logger.info(`[${CACHE_NAMESPACE}] No related practice sessions to clean from cache.`);
+					return;
+				}
+
+				await deleteSessionsFromCache(practiceSessionsToDelete);
+				
+				// 清理临时存储
+				practiceSessionsToDelete = [];
+
+			} catch (error) {
+				logger.error(error, `[${CACHE_NAMESPACE}] Error cleaning cache after exercise deletion:`);
+				// 清理临时存储
+				practiceSessionsToDelete = [];
+			}
 		});
 	}
 );

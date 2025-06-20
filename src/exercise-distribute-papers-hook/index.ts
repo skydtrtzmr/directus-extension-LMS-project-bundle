@@ -50,7 +50,7 @@ export default defineHook(({ filter, action }, { services, database, logger }) =
 
 					// 3. 批量插入该学生的所有答题记录
 					await questionResultsService.createMany(questionResultsBatch, {
-						emitEvents: false,
+						emitEvents: true,
 					});
 
 					logger.info(`Worker (job ${job.id}): 成功为学生 ${studentId} 创建练习会话 ${practiceSessionId} 并分发 ${questionResultsBatch.length} 道题目`);
@@ -262,7 +262,7 @@ export default defineHook(({ filter, action }, { services, database, logger }) =
 					// 3. 一次性批量插入所有答题记录
 					if (allQuestionResults.length > 0) {
 						await questionResultsService.createMany(allQuestionResults, {
-							emitEvents: false,
+							emitEvents: true,
 						});
 					}
 				});

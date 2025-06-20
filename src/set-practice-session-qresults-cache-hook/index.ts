@@ -31,62 +31,78 @@ export default defineHook(
             [key: string]: any; // To allow for other fields not explicitly typed
         }
 
-        // 单个练习会话的答题结果缓存更新
-        const updateSingleSessionQResultsInCache = async (practiceSessionId: string | number) => {
-            logger.info(
-                `Updating single practice session (ID: ${practiceSessionId}) question results cache...`
-            );
+        // 增量式地将新的或更新的答题结果哈希对象添加到缓存中
+        const addOrUpdateQuestionResultHashesInCache = async (
+            qrItems: any[],
+            isUpdate: boolean = false
+        ) => {
+            if (!qrItems || qrItems.length === 0) {
+                return;
+            }
 
-            try {
-                const practiceSessionsService = new ItemsService(
-                    "practice_sessions",
-                    { schema: await getSchema(), accountability: { admin: true } as any }
-                );
-
-                // 获取单个练习会话及其答题结果
-                const sessionWithResults: PracticeSessionWithResults = await practiceSessionsService.readOne(practiceSessionId, {
-                    fields: [
-                        "id",
-                        "question_results.id",
-                        "question_results.practice_session_id",
-                        "question_results.question_in_paper_id",
-                        "question_results.question_type",
-                        "question_results.point_value",
-                        "question_results.score",
-                        "question_results.submit_ans_select_radio",
-                        "question_results.submit_ans_select_multiple_checkbox",
-                        "question_results.is_flagged",
-                    ],
-                });
-
-                if (!sessionWithResults) {
-                    logger.warn(`Practice session (ID: ${practiceSessionId}) not found, couldn't update QResults cache.`);
-                    return;
+            // 按 practice_session_id 对答题结果进行分组
+            const groupedBySession = qrItems.reduce((acc, qr) => {
+                const sessionId = qr.practice_session_id;
+                if (sessionId) {
+                    if (!acc[sessionId]) {
+                        acc[sessionId] = [];
+                    }
+                    acc[sessionId].push(qr);
                 }
+                return acc;
+            }, {} as Record<string | number, any[]>);
 
-                // 如果这个练习会话还没有答题结果，跳过缓存（这是正常情况）
-                if (!Array.isArray(sessionWithResults.question_results) || sessionWithResults.question_results.length === 0) {
-                    logger.info(`Practice session (ID: ${practiceSessionId}) has no question results yet, skipping QResults cache update.`);
-                    return;
-                }
-
-                // 使用相同的缓存函数处理单个会话
-                await cacheNestedObjectsToIndividualRedisHashes<PracticeSessionWithResults, any>(
-                    redis,
-                    "practice_session", // parentNamespace
-                    [sessionWithResults], // 包装为数组
-                    "id", // parentIdField
-                    "question_results", // childListName
-                    "qresult", // childNamespace
-                    "id", // childIdField
-                    CACHE_TTL_SECONDS, // ttlSeconds
-                );
-
+            for (const sessionId in groupedBySession) {
+                const qrsForSession = groupedBySession[sessionId];
                 logger.info(
-                    `Successfully updated question results cache for practice session (ID: ${practiceSessionId}).`
+                    `${isUpdate ? "Updating" : "Incrementally caching"} ${
+                        qrsForSession.length
+                    } question result hashes for practice session ${sessionId}.`
                 );
-            } catch (error) {
-                logger.error(error, `Error updating single session QResults cache for ID ${practiceSessionId}:`);
+
+                const pipeline = redis.multi();
+
+                for (const qr of qrsForSession) {
+                    const key = `practice_session:${sessionId}:qresult:${qr.id}`;
+                    
+                    // 将对象转换为适合 HSET 的格式，所有值都转换为字符串
+                    const hashData: { [key: string]: string } = {};
+                    for (const [field, value] of Object.entries(qr)) {
+                        if (value === null || value === undefined) {
+                            // 跳过 null 或 undefined 值，这样它们就不会出现在哈希中
+                            continue;
+                        }
+                        if (typeof value === 'string') {
+                            hashData[field] = value;
+                        } else {
+                            // 对于数字、布尔值、数组和对象，使用 JSON.stringify
+                            hashData[field] = JSON.stringify(value);
+                        }
+                    }
+
+                    if (Object.keys(hashData).length > 0) {
+                        // 使用 HSET 存储为哈希
+                        pipeline.hset(key, hashData);
+                        // 为键设置过期时间
+                        pipeline.expire(key, CACHE_TTL_SECONDS);
+                    }
+                }
+
+                try {
+                    await pipeline.exec();
+                    logger.info(
+                        `Successfully ${isUpdate ? "updated" : "cached"} ${
+                            qrsForSession.length
+                        } QR hashes for session ${sessionId}.`
+                    );
+                } catch (error) {
+                    logger.error(
+                        error,
+                        `Failed to execute ${
+                            isUpdate ? "update" : "incremental cache"
+                        } pipeline for session ${sessionId}.`
+                    );
+                }
             }
         };
 
@@ -171,35 +187,168 @@ export default defineHook(
             await fetchAndCachePracticeSessionResults();
         });
 
-        // 监听练习会话创建事件，进行增量缓存更新
-        action("practice_sessions.items.create", async (meta, context) => {
-            logger.info(
-                `Practice session created (ID: ${meta.key}), updating QResults cache.`
-            );
-            await updateSingleSessionQResultsInCache(meta.key);
-        });
+        // 监听答题结果创建事件，进行增量缓存更新
+        // 这是最可靠和最高效的触发点
+        action("question_results.items.create", async (meta, context) => {
+            // 安全地处理单次和批量创建事件
+            const createdIds = meta.keys || (meta.key ? [meta.key] : []);
 
-        // 监听练习会话更新事件，进行增量缓存更新
-        action("practice_sessions.items.update", async (meta, context) => {
-            if (!Array.isArray(meta.keys)) return;
+            if (createdIds.length === 0) return;
+
             logger.info(
-                `Practice sessions updated (IDs: ${meta.keys.join(", ")}), updating QResults cache.`
+                `${createdIds.length} question results created, triggering incremental cache update.`
             );
-            for (const key of meta.keys) {
-                await updateSingleSessionQResultsInCache(key);
+
+            try {
+                const questionResultsService = new ItemsService(
+                    "question_results",
+                    {
+                        schema: await getSchema(),
+                        accountability: { admin: true } as any,
+                    }
+                );
+
+                // 一次性读取所有新创建的条目
+                const newQuestionResults = await questionResultsService.readMany(
+                    createdIds,
+                    {
+                        fields: [
+                            "id",
+                            "practice_session_id",
+                            "question_in_paper_id",
+                            "question_type",
+                            "point_value",
+                            "score",
+                            "submit_ans_select_radio",
+                            "submit_ans_select_multiple_checkbox",
+                            "is_flagged",
+                        ],
+                    }
+                );
+
+                await addOrUpdateQuestionResultHashesInCache(
+                    newQuestionResults,
+                    false
+                );
+            } catch (error) {
+                logger.error(
+                    error,
+                    "Error in question_results.items.create hook for incremental cache update:"
+                );
             }
         });
 
-        // 监听练习会话删除事件，清理相关缓存
-        action("practice_sessions.items.delete", async (meta, context) => {
-            if (!Array.isArray(meta.payload)) return;
+        // 监听答题结果更新事件，精确更新对应的缓存哈希
+        action("question_results.items.update", async(meta, context) => {
+            const updatedIds = meta.keys || [];
+            if (updatedIds.length === 0) return;
+
             logger.info(
-                `Practice sessions deleted (IDs: ${meta.payload.join(", ")}), cleaning QResults cache.`
+                `${updatedIds.length} question results updated, triggering cache update.`
             );
+
+            try {
+                const questionResultsService = new ItemsService(
+                    "question_results",
+                    {
+                      schema: await getSchema(),
+                      accountability: { admin: true } as any,
+                    }
+                  );
+            
+                  // 一次性读取所有更新的条目
+                  const updatedQuestionResults = await questionResultsService.readMany(
+                    updatedIds,
+                    {
+                      fields: [
+                        "id",
+                        "practice_session_id",
+                        "question_in_paper_id",
+                        "question_type",
+                        "point_value",
+                        "score",
+                        "submit_ans_select_radio",
+                        "submit_ans_select_multiple_checkbox",
+                        "is_flagged",
+                      ],
+                    }
+                  );
+            
+                  await addOrUpdateQuestionResultHashesInCache(
+                      updatedQuestionResults,
+                      true
+                  );
+
+            } catch (error) {
+                logger.error(
+                    error,
+                    "Error in question_results.items.update hook for cache update:"
+                  );
+            }
+        });
+
+        // 存储要删除的练习会话ID，供后续清理缓存使用
+        let practiceSessionsToDelete: (string | number)[] = [];
+
+        // 监听练习删除事件，在删除前获取相关数据（因为删除practice_sessions是级联的）
+        filter("exercises.items.delete", async (payload: any, meta: any, context: any) => {
+            logger.info("Exercise deletion detected, preparing to get related practice session data.");
             
             try {
+                const deletedExerciseIds = payload;
+                if (!Array.isArray(deletedExerciseIds) || deletedExerciseIds.length === 0) {
+                    logger.warn("No exercise IDs found in deletion event.");
+                    return payload;
+                }
+
+                logger.info(`Processing deleted exercise IDs: ${deletedExerciseIds.join(", ")}`);
+
+                // 查询这些练习对应的practice_sessions并存储
+                const { accountability, schema } = context;
+                const practiceSessionsService = new ItemsService(
+                    "practice_sessions",
+                    { schema, accountability }
+                );
+
+                try {
+                    const relatedPracticeSessions = await practiceSessionsService.readByQuery({
+                        fields: ["id"],
+                        filter: {
+                            'exercises_students_id': {
+                                'exercises_id': {
+                                    '_in': deletedExerciseIds
+                                }
+                            }
+                        },
+                        limit: -1
+                    });
+
+                    practiceSessionsToDelete = relatedPracticeSessions.map((session: any) => session.id);
+                    logger.info(`Found ${practiceSessionsToDelete.length} related practice sessions to clean QResults cache for.`);
+                } catch (queryError) {
+                    logger.error(queryError, "Error querying related practice sessions:");
+                    practiceSessionsToDelete = [];
+                }
+
+            } catch (error) {
+                logger.error(error, "Error handling exercise deletion filter event for QResults cache:");
+            }
+
+            return payload; // 必须返回payload让删除操作继续
+        });
+
+        // 监听练习删除事件，清理相关的练习会话答题结果缓存（因为删除practice_sessions是级联的）
+        action("exercises.items.delete", async (meta: any, context: any) => {
+            logger.info("Exercise deletion completed, cleaning related practice session QResults cache.");
+            
+            try {
+                if (practiceSessionsToDelete.length === 0) {
+                    logger.info("No related practice sessions to clean QResults cache for.");
+                    return;
+                }
+
                 // 删除相关的答题结果缓存
-                for (const practiceSessionId of meta.payload) {
+                for (const practiceSessionId of practiceSessionsToDelete) {
                     const pattern = `practice_session:${practiceSessionId}:qresult:*`;
                     const keys = await redis.keys(pattern);
                     if (keys.length > 0) {
@@ -207,8 +356,14 @@ export default defineHook(
                         logger.info(`Deleted ${keys.length} QResult cache keys for practice session ${practiceSessionId}`);
                     }
                 }
+
+                // 清理临时存储
+                practiceSessionsToDelete = [];
+
             } catch (error) {
-                logger.error(error, "Error cleaning QResults cache after practice session deletion:");
+                logger.error(error, "Error cleaning QResults cache after exercise deletion:");
+                // 清理临时存储
+                practiceSessionsToDelete = [];
             }
         });
     }
