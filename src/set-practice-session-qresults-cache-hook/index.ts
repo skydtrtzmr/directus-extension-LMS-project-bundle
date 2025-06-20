@@ -6,6 +6,7 @@ import type {
     HookExtensionContext,
     RegisterFunctions,
 } from "@directus/extensions";
+import { Queue, Worker } from "bullmq";
 
 const redis = new IORedis(process.env.REDIS!, {
     maxRetriesPerRequest: null, // 适用于 Redis 连接本身
@@ -166,6 +167,72 @@ export default defineHook(
             }
         };
 
+        const fetchAndCacheSinglePracticeSession = async (practiceSessionId: string | number, schema: any) => {
+            logger.info(`Fetching results to cache for single practice session ${practiceSessionId}...`);
+            try {
+                const questionResultsService = new ItemsService(
+                    "question_results",
+                    { schema, accountability: { admin: true } as any }
+                );
+        
+                // Fetch all question_results for this session
+                const allQuestionResultsForSession = await questionResultsService.readByQuery({
+                    filter: {
+                        practice_session_id: { _eq: practiceSessionId }
+                    },
+                    fields: [
+                        "id",
+                        "practice_session_id",
+                        "question_in_paper_id",
+                        "question_type",
+                        "point_value",
+                        "score",
+                        "submit_ans_select_radio",
+                        "submit_ans_select_multiple_checkbox",
+                        "is_flagged",
+                    ],
+                    limit: -1,
+                });
+        
+                if (!allQuestionResultsForSession || allQuestionResultsForSession.length === 0) {
+                    logger.info(`No question results found for practice session ${practiceSessionId} to cache.`);
+                    return;
+                }
+                
+                await addOrUpdateQuestionResultHashesInCache(allQuestionResultsForSession, false);
+                logger.info(`Successfully cached ${allQuestionResultsForSession.length} QRs for session ${practiceSessionId}.`);
+        
+            } catch (error) {
+                logger.error(error, `Error during fetchAndCacheSinglePracticeSession for session ${practiceSessionId}:`);
+                throw error; // Rethrow to let the job fail and be retried
+            }
+        };
+
+        // 初始化缓存更新队列的 Worker
+        let cacheWorkerInitialized = false;
+        if (!cacheWorkerInitialized) {
+            const worker = new Worker("practiceSessionCacheQueue", async (job) => {
+                const { practiceSessionId, schema } = job.data;
+                if (!practiceSessionId) {
+                    logger.warn(`Cache worker received job ${job.id} without a practiceSessionId.`);
+                    return;
+                }
+                logger.info(`Cache worker (job ${job.id}): processing practice session ${practiceSessionId}`);
+                await fetchAndCacheSinglePracticeSession(practiceSessionId, schema);
+            }, { connection: redis, concurrency: 5 });
+
+            worker.on("completed", (job) => {
+                logger.info(`Cache worker: job ${job.id} for session ${job.data.practiceSessionId} completed.`);
+            });
+
+            worker.on("failed", (job, err) => {
+                logger.error(`Cache worker: job ${job?.id} for session ${job?.data.practiceSessionId} failed: ${err.message}`);
+            });
+
+            cacheWorkerInitialized = true;
+            logger.info("Practice session cache worker initialized.");
+        }
+
         // 定时任务，例如每小时执行一次 (你可以调整 cron 表达式)
         // '0 * * * *' 表示每小时的第0分钟执行
         // '*/1 * * * *' 表示每1分钟执行一次，对于全量刷新可能过于频繁，请谨慎设置
@@ -185,57 +252,6 @@ export default defineHook(
                 "Initial practice_session QResults cache warming triggered."
             );
             await fetchAndCachePracticeSessionResults();
-        });
-
-        // 监听答题结果创建事件，进行增量缓存更新
-        // 这是最可靠和最高效的触发点
-        action("question_results.items.create", async (meta, context) => {
-            // 安全地处理单次和批量创建事件
-            const createdIds = meta.keys || (meta.key ? [meta.key] : []);
-
-            if (createdIds.length === 0) return;
-
-            logger.info(
-                `${createdIds.length} question results created, triggering incremental cache update.`
-            );
-
-            try {
-                const questionResultsService = new ItemsService(
-                    "question_results",
-                    {
-                        schema: await getSchema(),
-                        accountability: { admin: true } as any,
-                    }
-                );
-
-                // 一次性读取所有新创建的条目
-                const newQuestionResults = await questionResultsService.readMany(
-                    createdIds,
-                    {
-                        fields: [
-                            "id",
-                            "practice_session_id",
-                            "question_in_paper_id",
-                            "question_type",
-                            "point_value",
-                            "score",
-                            "submit_ans_select_radio",
-                            "submit_ans_select_multiple_checkbox",
-                            "is_flagged",
-                        ],
-                    }
-                );
-
-                await addOrUpdateQuestionResultHashesInCache(
-                    newQuestionResults,
-                    false
-                );
-            } catch (error) {
-                logger.error(
-                    error,
-                    "Error in question_results.items.create hook for incremental cache update:"
-                );
-            }
         });
 
         // 监听答题结果更新事件，精确更新对应的缓存哈希

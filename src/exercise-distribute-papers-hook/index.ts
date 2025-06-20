@@ -8,6 +8,7 @@ const connection = new IORedis(process.env.REDIS!, {
 });
 
 const exerciseDistributeQueue = new Queue("exerciseDistributeQueue", { connection });
+const practiceSessionCacheQueue = new Queue("practiceSessionCacheQueue", { connection });
 
 export default defineHook(({ filter, action }, { services, database, logger }) => {
 	const { ItemsService } = services;
@@ -52,6 +53,18 @@ export default defineHook(({ filter, action }, { services, database, logger }) =
 					await questionResultsService.createMany(questionResultsBatch, {
 						emitEvents: true,
 					});
+
+					// 派发一个任务到缓存队列，以更新这个练习会话的缓存
+					try {
+						await practiceSessionCacheQueue.add('cache-practice-session', { 
+							practiceSessionId: practiceSessionId,
+							schema: job.data.schema, // 传递 schema 给缓存 Worker
+						 });
+						logger.info(`Worker (job ${job.id}): Successfully queued cache update for practice session ${practiceSessionId}`);
+					} catch (queueError) {
+						logger.error(`Worker (job ${job.id}): Failed to queue cache update for practice session ${practiceSessionId}:`, queueError);
+						// 此处的失败不应中断主流程，因此只记录错误。缓存最终会通过定时任务刷新。
+					}
 
 					logger.info(`Worker (job ${job.id}): 成功为学生 ${studentId} 创建练习会话 ${practiceSessionId} 并分发 ${questionResultsBatch.length} 道题目`);
 
