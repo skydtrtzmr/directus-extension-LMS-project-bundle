@@ -179,7 +179,7 @@ export default defineHook(
 
 		// 1. 全量更新缓存
 		// Schedule to run every 30 minutes
-		schedule("*/10 * * * *", async () => {
+		schedule("*/30 * * * *", async () => {
 			logger.info(
 				`[${CACHE_NAMESPACE}] Scheduled cache refresh triggered.`
 			);
