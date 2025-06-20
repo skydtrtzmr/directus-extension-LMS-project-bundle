@@ -213,6 +213,50 @@ export default defineHook(
 			}
 		});
 
+		action("exercises.items.update", async (meta, context) => {
+            const updatedExerciseIds = meta.keys;
+            if (!Array.isArray(updatedExerciseIds) || updatedExerciseIds.length === 0) {
+                logger.warn(`[${CACHE_NAMESPACE}] No exercise IDs found in update event.`);
+                return;
+            }
+
+            logger.info(`[${CACHE_NAMESPACE}] Exercises updated (IDs: ${updatedExerciseIds.join(", ")}), preparing to update related practice session caches.`);
+
+            try {
+                const practiceSessionsService = new ItemsService(
+                    PRACTICE_SESSION_COLLECTION,
+                    { schema: await getSchema(), accountability: { admin: true } }
+                );
+
+                const relatedPracticeSessions = await practiceSessionsService.readByQuery({
+                    fields: ["id"],
+                    filter: {
+                        'exercises_students_id': {
+                            'exercises_id': {
+                                '_in': updatedExerciseIds
+                            }
+                        }
+                    },
+                    limit: -1
+                });
+
+                if (relatedPracticeSessions.length === 0) {
+                    logger.info(`[${CACHE_NAMESPACE}] No related practice sessions found for updated exercises (IDs: ${updatedExerciseIds.join(", ")}).`);
+                    return;
+                }
+
+                const sessionIdsToUpdate = relatedPracticeSessions.map((session: any) => session.id);
+                logger.info(`[${CACHE_NAMESPACE}] Found ${sessionIdsToUpdate.length} related practice sessions to update in cache.`);
+
+                for (const sessionId of sessionIdsToUpdate) {
+                    await updateSingleSessionInCache(sessionId);
+                }
+
+            } catch (error) {
+                logger.error(error, `[${CACHE_NAMESPACE}] Error updating related practice sessions cache after exercise update:`);
+            }
+        });
+
 		// 存储要删除的练习会话ID，供后续清理缓存使用
 		let practiceSessionsToDelete: (string | number)[] = [];
 
