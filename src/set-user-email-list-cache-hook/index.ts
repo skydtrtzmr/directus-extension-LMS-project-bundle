@@ -44,7 +44,7 @@ export default defineHook(
                         limit: -1,
                     }),
                 "email",
-                3600
+                36000
             );
         };
 
