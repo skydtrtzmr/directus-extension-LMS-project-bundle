@@ -153,6 +153,11 @@
 				"type": "endpoint",
 				"name": "recalculate-practice-session-score-endpoint",
 				"source": "src/recalculate-practice-session-score-endpoint/index.ts"
+			},
+			{
+				"type": "module",
+				"name": "school-overview-module",
+				"source": "src/school-overview-module/index.ts"
 			}
 		],
 		"host": "^10.10.0"
