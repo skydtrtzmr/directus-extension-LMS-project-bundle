@@ -31,6 +31,7 @@
 </template>
 
 <script setup lang="ts">
+
 import { ref, computed, onMounted } from 'vue';
 import OverviewPage from './OverviewPage.vue';
 import SubjectAnalysisPage from './SubjectAnalysisPage.vue';
@@ -41,7 +42,7 @@ import { useThemeColor } from '../composables/useThemeColor';
 const currentPage = ref('overview');
 
 // 使用系统主题色
-const { themeColorCSSVars, fetchThemeColor } = useThemeColor();
+const { themeColorCSSVars, fetchThemeColor, themeColor, loading, error } = useThemeColor();
 
 const navigationItems = [
     {
@@ -79,7 +80,15 @@ const handleNavigation = (key: string) => {
 };
 
 onMounted(async () => {
-    await fetchThemeColor();
+
+    try {
+        await fetchThemeColor();
+        console.log('[ModuleView] 获取主题色完成');
+        console.log('[ModuleView] 最终主题色:', themeColor.value);
+        console.log('[ModuleView] CSS变量:', themeColorCSSVars.value);
+    } catch (err) {
+        console.error('[ModuleView] 获取主题色失败:', err);
+    }
 });
 </script>
 

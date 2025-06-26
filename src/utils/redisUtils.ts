@@ -289,7 +289,7 @@ export async function cacheNestedObjectsToIndividualRedisHashes<
         try {
             const keysToDelete = await redis.keys(oldChildKeysPattern);
             if (keysToDelete && keysToDelete.length > 0) {
-                console.log(`[IndividualNestedCache] Parent '${parentId}': Found ${keysToDelete.length} old child keys matching '${oldChildKeysPattern}'. Deleting...`);
+                // console.log(`[IndividualNestedCache] Parent '${parentId}': Found ${keysToDelete.length} old child keys matching '${oldChildKeysPattern}'. Deleting...`);
                 await redis.del(keysToDelete); // 使用 redis.del([...keysToDelete]) 如果 keys 是数组
             }
         } catch (error) {
@@ -302,7 +302,7 @@ export async function cacheNestedObjectsToIndividualRedisHashes<
             continue;
         }
 
-        console.log(`[IndividualNestedCache] Parent '${parentId}': Processing ${childItems.length} child items from list '${childListName as string}'.`);
+        // console.log(`[IndividualNestedCache] Parent '${parentId}': Processing ${childItems.length} child items from list '${childListName as string}'.`);
         const pipeline = redis.pipeline();
         let childrenProcessedCount = 0;
 

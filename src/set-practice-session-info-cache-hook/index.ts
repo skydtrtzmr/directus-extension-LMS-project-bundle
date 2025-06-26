@@ -68,9 +68,9 @@ export default defineHook(
 						ID_FIELD,
 						CACHE_TTL_SECONDS
 					);
-					logger.info(
-						`[${CACHE_NAMESPACE}] Successfully cached session (ID: ${itemId}).`
-					);
+					// logger.info(
+					// 	`[${CACHE_NAMESPACE}] Successfully cached session (ID: ${itemId}).`
+					// );
 				} else {
 					logger.warn(
 						`[${CACHE_NAMESPACE}] Session (ID: ${itemId}) not found, couldn't update cache.`
