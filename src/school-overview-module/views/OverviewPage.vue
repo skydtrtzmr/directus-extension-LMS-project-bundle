@@ -53,9 +53,9 @@
                 />
             </div>
 
-            <!-- 课程类型分布 -->
+            <!-- 课程资源类型分布 -->
             <div class="chart-card">
-                <h4>课程类型分布</h4>
+                <h4>课程资源类型分布</h4>
                 <ChartComponent 
                     type="pie" 
                     :data="schoolData.courseDistributionData" 
