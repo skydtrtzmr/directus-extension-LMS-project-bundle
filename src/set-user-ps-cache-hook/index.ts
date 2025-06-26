@@ -1,5 +1,6 @@
 import { defineHook } from '@directus/extensions-sdk';
 import IORedis from "ioredis";
+import { scanKeysByPattern } from '../utils/redisUtils';
 import type {
 	HookExtensionContext,
 	RegisterFunctions,
@@ -358,7 +359,7 @@ export default defineHook(
 
 				// 从所有用户的缓存中移除这些practice_session_id
 				const pattern = `${REVERSE_INDEX_PREFIX}:*`;
-				const userCacheKeys = await redis.keys(pattern);
+				const userCacheKeys = await scanKeysByPattern(redis, pattern, logger);
 
 				if (userCacheKeys.length === 0) {
 					logger.info(`[${REVERSE_INDEX_PREFIX}] 没有找到用户缓存，无需清理`);

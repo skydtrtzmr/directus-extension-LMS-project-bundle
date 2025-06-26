@@ -1,6 +1,7 @@
 // fetch-practice-session-cache-endpoint/index.ts
 import { defineEndpoint } from '@directus/extensions-sdk';
 import IORedis from 'ioredis'; // 确保你已经安装了 ioredis
+import { scanKeysByPattern } from '../utils/redisUtils';
 // 假设你的 HookExtensionContext 提供了 services, getSchema, logger
 // 如果你需要 ItemsService 来从数据库回源，也需要导入它和相关类型
 // import type { EndpointExtensionContext } from '@directus/extensions'; // 更准确的类型
@@ -27,7 +28,7 @@ export default defineEndpoint((router, context) => {
             // 我们需要扫描 practice_session:*:qresult:* 来找出所有相关的键
             const pattern = 'practice_session:*:qresult:*';
             context.logger.info(`Scanning Redis for keys matching pattern: ${pattern}`);
-            const keys = await redis.keys(pattern);
+            const keys = await scanKeysByPattern(redis, pattern, context.logger);
             
             // 从键中提取唯一的 sessionId
             const sessionIds = new Set<string>();
@@ -66,7 +67,7 @@ export default defineEndpoint((router, context) => {
         context.logger.info(`Fetching qresults for session ID ${sessionId} using pattern: ${cacheKeyPattern}`);
 
         try {
-            const qresultKeys = await redis.keys(cacheKeyPattern);
+            const qresultKeys = await scanKeysByPattern(redis, cacheKeyPattern, context.logger);
 
             if (!qresultKeys || qresultKeys.length === 0) {
                 context.logger.info(`No qresult keys found for session ID ${sessionId} with pattern ${cacheKeyPattern}.`);

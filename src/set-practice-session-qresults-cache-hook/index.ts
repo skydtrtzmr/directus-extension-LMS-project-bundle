@@ -1,7 +1,7 @@
 // set-practice-session-qresults-cache-hook/index.ts
 import { defineHook } from "@directus/extensions-sdk";
 import IORedis from "ioredis";
-import { cacheNestedObjectsToIndividualRedisHashes } from "../utils/redisUtils";
+import { cacheNestedObjectsToIndividualRedisHashes, scanKeysByPattern } from "../utils/redisUtils";
 import type {
     HookExtensionContext,
     RegisterFunctions,
@@ -366,7 +366,7 @@ export default defineHook(
                 // 删除相关的答题结果缓存
                 for (const practiceSessionId of practiceSessionsToDelete) {
                     const pattern = `practice_session:${practiceSessionId}:qresult:*`;
-                    const keys = await redis.keys(pattern);
+                    const keys = await scanKeysByPattern(redis, pattern, logger);
                     if (keys.length > 0) {
                         await redis.del(keys);
                         logger.info(`Deleted ${keys.length} QResult cache keys for practice session ${practiceSessionId}`);

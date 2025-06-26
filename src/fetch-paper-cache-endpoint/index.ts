@@ -1,5 +1,6 @@
 import { defineEndpoint } from '@directus/extensions-sdk';
 import IORedis from 'ioredis'; // 确保你已经安装了 ioredis
+import { scanKeysByPattern } from '../utils/redisUtils';
 // 假设你的 HookExtensionContext 提供了 services, getSchema, logger
 // 如果你需要 ItemsService 来从数据库回源，也需要导入它和相关类型
 // import type { EndpointExtensionContext } from '@directus/extensions'; // 更准确的类型
@@ -21,7 +22,7 @@ export default defineEndpoint((router, context) => {
     router.get('/papers', async (_req, res) => {
         try {
             // 示例：获取所有 'papers:*' 格式的键
-            const paperKeys = await redis.keys('papers:*');
+            const paperKeys = await scanKeysByPattern(redis, 'papers:*', context.logger);
             const paperIds = paperKeys.map(key => key.replace('papers:', ''));
             return res.json({ ids: paperIds });
         } catch (error) {

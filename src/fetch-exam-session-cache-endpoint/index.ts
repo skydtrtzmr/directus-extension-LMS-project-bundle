@@ -1,5 +1,6 @@
 import { defineEndpoint } from '@directus/extensions-sdk';
 import IORedis from 'ioredis'; // 确保你已经安装了 ioredis
+import { scanKeysByPattern } from '../utils/redisUtils';
 
 // 在模块顶层或合适的地方初始化 Redis 连接
 // 确保这个 Redis 实例与你的 set-exam-session-qresults-cache-hook.ts 中使用的配置一致
@@ -17,7 +18,7 @@ export default defineEndpoint((router, context) => {
             // 我们需要扫描 exam_session:*:qresult:* 来找出所有相关的键
             const pattern = 'exam_session:*:qresult:*';
             context.logger.info(`Scanning Redis for keys matching pattern: ${pattern}`);
-            const keys = await redis.keys(pattern);
+            const keys = await scanKeysByPattern(redis, pattern, context.logger);
             
             // 从键中提取唯一的 sessionId
             const sessionIds = new Set<string>();
@@ -56,7 +57,7 @@ export default defineEndpoint((router, context) => {
         context.logger.info(`Fetching qresults for exam session ID ${sessionId} using pattern: ${cacheKeyPattern}`);
 
         try {
-            const qresultKeys = await redis.keys(cacheKeyPattern);
+            const qresultKeys = await scanKeysByPattern(redis, cacheKeyPattern, context.logger);
 
             if (!qresultKeys || qresultKeys.length === 0) {
                 context.logger.info(`No qresult keys found for exam session ID ${sessionId} with pattern ${cacheKeyPattern}.`);

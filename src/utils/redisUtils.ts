@@ -287,7 +287,7 @@ export async function cacheNestedObjectsToIndividualRedisHashes<
         // 1. 清理该父项之前的所有子项缓存 (如果存在)
         const oldChildKeysPattern = `${parentNamespace}:${parentId}:${childNamespace}:*`;
         try {
-            const keysToDelete = await redis.keys(oldChildKeysPattern);
+            const keysToDelete = await scanKeysByPattern(redis, oldChildKeysPattern);
             if (keysToDelete && keysToDelete.length > 0) {
                 // console.log(`[IndividualNestedCache] Parent '${parentId}': Found ${keysToDelete.length} old child keys matching '${oldChildKeysPattern}'. Deleting...`);
                 await redis.del(keysToDelete); // 使用 redis.del([...keysToDelete]) 如果 keys 是数组
@@ -443,6 +443,40 @@ export async function setFlattenedObjectToHash(
         console.error(`[FlattenedCache] Hash key '${hashKey}': Error executing Redis pipeline. Error:`, error);
     }
 
+}
+
+/**
+ * Scans for all keys matching a given pattern using SCAN to avoid blocking Redis.
+ * This is safer for production environments than using the KEYS command.
+ *
+ * @param redis The IORedis client instance.
+ * @param pattern The pattern to match keys against (e.g., "namespace:*").
+ * @param logger Optional logger to log information.
+ * @returns Array of matching keys.
+ */
+export async function scanKeysByPattern(
+    redis: Redis,
+    pattern: string,
+    logger?: { info: (msg: string) => void; error: (err: any, msg?: string) => void }
+): Promise<string[]> {
+    const log = logger || { info: console.log, error: (e, m) => console.error(m, e) };
+    log.info(`[RedisUtils] Starting to scan keys matching pattern: ${pattern}`);
+    let cursor = '0';
+    const allKeys: string[] = [];
+    try {
+        do {
+            const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+            cursor = nextCursor;
+            if (keys.length > 0) {
+                allKeys.push(...keys);
+            }
+        } while (cursor !== '0');
+        log.info(`[RedisUtils] Finished scanning keys for pattern "${pattern}". Found ${allKeys.length} keys`);
+        return allKeys;
+    } catch (error) {
+        log.error(error, `[RedisUtils] Error while scanning keys with pattern "${pattern}"`);
+        return [];
+    }
 }
 
 /**
