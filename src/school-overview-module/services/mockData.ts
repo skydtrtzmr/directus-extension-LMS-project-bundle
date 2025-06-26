@@ -274,7 +274,7 @@ export const schoolOverviewData = {
         }]
     },
     registrationData: {
-        labels: ['7月', '8月', '9月', '10月', '11月', '12月'],
+        labels: ['1月', '2月', '3月', '4月', '5月', '6月'],
         datasets: [{
             label: '新注册用户',
             data: [45, 67, 123, 89, 76, 98],
