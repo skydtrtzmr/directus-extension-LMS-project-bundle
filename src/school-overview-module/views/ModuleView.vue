@@ -1,5 +1,5 @@
 <template>
-    <private-view title="统计分析">
+    <private-view title="统计分析" :style="themeColorCSSVars">
         <template #headline>
             <v-breadcrumb :items="breadcrumbItems" />
         </template>
@@ -31,13 +31,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import OverviewPage from './OverviewPage.vue';
 import SubjectAnalysisPage from './SubjectAnalysisPage.vue';
 import ExamAnalysisPage from './ExamAnalysisPage.vue';
 import ClassAnalysisPage from './ClassAnalysisPage.vue';
+import { useThemeColor } from '../composables/useThemeColor';
 
 const currentPage = ref('overview');
+
+// 使用系统主题色
+const { themeColorCSSVars, fetchThemeColor } = useThemeColor();
 
 const navigationItems = [
     {
@@ -73,6 +77,10 @@ const breadcrumbItems = computed(() => {
 const handleNavigation = (key: string) => {
     currentPage.value = key;
 };
+
+onMounted(async () => {
+    await fetchThemeColor();
+});
 </script>
 
 <style scoped>
@@ -109,7 +117,7 @@ const handleNavigation = (key: string) => {
 }
 
 .nav-item.active {
-    background-color: var(--primary);
+    background-color: var(--ui-theme-color, var(--primary));
     color: var(--primary-foreground);
 }
 

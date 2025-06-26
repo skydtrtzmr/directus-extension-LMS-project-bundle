@@ -1,31 +1,29 @@
 <template>
-    <div class="class-analysis-container">
+    <div class="class-analysis-container" :style="themeColorCSSVars">
         <!-- 班级选择器 -->
         <div class="class-selector-card">
             <h3>选择班级</h3>
-            <div class="class-buttons">
-                <button
-                    v-for="classInfo in classes"
-                    :key="classInfo.id"
-                    @click="selectClass(classInfo)"
-                    class="class-btn"
-                    :class="{ active: selectedClass && selectedClass.id === classInfo.id }"
-                >
-                    <v-icon name="class" />
-                    <span>{{ classInfo.name }}</span>
-                </button>
+            <div class="class-selector">
+                <v-select 
+                    v-model="selectedClass"
+                    :items="classes"
+                    item-text="name"
+                    item-value="id"
+                    placeholder="请选择班级"
+                    @update:model-value="onClassChange"
+                />
             </div>
         </div>
 
         <!-- 班级统计卡片 -->
-        <div class="stats-grid" v-if="selectedClass">
+        <div class="stats-grid" v-if="currentClassData">
             <div class="stat-card">
                 <div class="stat-icon">
                     <v-icon name="people" />
                 </div>
                 <div class="stat-content">
-                    <h3>{{ selectedClass.studentCount }}</h3>
-                    <p>班级人数</p>
+                    <h3>{{ currentClassData.studentCount }}</h3>
+                    <p>学生人数</p>
                 </div>
             </div>
             <div class="stat-card">
@@ -33,7 +31,7 @@
                     <v-icon name="grade" />
                 </div>
                 <div class="stat-content">
-                    <h3>{{ selectedClass.averageScore }}</h3>
+                    <h3>{{ currentClassData.averageScore }}</h3>
                     <p>班级平均分</p>
                 </div>
             </div>
@@ -42,7 +40,7 @@
                     <v-icon name="trending_up" />
                 </div>
                 <div class="stat-content">
-                    <h3>{{ selectedClass.attendanceRate }}%</h3>
+                    <h3>{{ currentClassData.attendanceRate }}%</h3>
                     <p>出勤率</p>
                 </div>
             </div>
@@ -51,17 +49,17 @@
                     <v-icon name="star" />
                 </div>
                 <div class="stat-content">
-                    <h3>{{ selectedClass.ranking }}</h3>
+                    <h3>{{ currentClassData.ranking }}</h3>
                     <p>班级排名</p>
                 </div>
             </div>
         </div>
 
         <!-- 图表区域 -->
-        <div class="charts-grid" v-if="selectedClass && chartData">
+        <div class="charts-grid" v-if="currentClassData && chartData">
             <!-- 班级成绩分布 -->
             <div class="chart-card">
-                <h4>{{ selectedClass.name }} - 成绩分布</h4>
+                <h4>{{ currentClassData.name }} - 成绩分布</h4>
                 <ChartComponent 
                     type="bar" 
                     :data="chartData.scoreDistribution" 
@@ -70,36 +68,36 @@
                 />
             </div>
 
-            <!-- 各科成绩对比 -->
+            <!-- 学科平均分对比 -->
             <div class="chart-card">
-                <h4>{{ selectedClass.name }} - 各科成绩对比</h4>
+                <h4>{{ currentClassData.name }} - 各学科平均分</h4>
                 <ChartComponent 
-                    type="line" 
-                    :data="chartData.subjectComparison" 
+                    type="bar" 
+                    :data="chartData.subjectAverages" 
                     :width="400" 
                     :height="250"
                 />
             </div>
 
-            <!-- 学习活跃度 -->
+            <!-- 出勤率趋势 -->
             <div class="chart-card">
-                <h4>{{ selectedClass.name }} - 学习活跃度</h4>
+                <h4>{{ currentClassData.name }} - 出勤率趋势</h4>
+                <ChartComponent 
+                    type="line" 
+                    :data="chartData.attendanceRate" 
+                    :width="400" 
+                    :height="250"
+                />
+            </div>
+
+            <!-- 作业完成情况 -->
+            <div class="chart-card">
+                <h4>{{ currentClassData.name }} - 作业完成情况</h4>
                 <ChartComponent 
                     type="pie" 
-                    :data="chartData.activityLevel" 
+                    :data="chartData.homeworkCompletion" 
                     :width="400" 
                     :height="300"
-                />
-            </div>
-
-            <!-- 月度表现趋势 -->
-            <div class="chart-card">
-                <h4>{{ selectedClass.name }} - 月度表现趋势</h4>
-                <ChartComponent 
-                    type="line" 
-                    :data="chartData.monthlyTrend" 
-                    :width="400" 
-                    :height="250"
                 />
             </div>
         </div>
@@ -107,18 +105,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import ChartComponent from '../ChartComponent.vue';
 import { DataService } from '../services/dataService';
 import type { ClassInfo } from '../services/mockData';
+import { useThemeColor } from '../composables/useThemeColor';
 
 const classes = ref<ClassInfo[]>([]);
-const selectedClass = ref<ClassInfo | null>(null);
+const selectedClass = ref<string>('');
 const chartData = ref<any>(null);
 
-const selectClass = async (classInfo: ClassInfo) => {
-    selectedClass.value = classInfo;
-    await loadChartData(classInfo.id);
+// 使用系统主题色（只用于UI元素）
+const { themeColorCSSVars, fetchThemeColor } = useThemeColor();
+
+const currentClassData = computed(() => 
+    classes.value.find(cls => cls.id === selectedClass.value) || null
+);
+
+const onClassChange = async (classId: string) => {
+    selectedClass.value = classId;
+    await loadChartData(classId);
 };
 
 const loadChartData = async (classId: string) => {
@@ -135,7 +141,7 @@ const loadClasses = async () => {
         classes.value = classList;
         if (classList.length > 0) {
             const firstClass = classList[0]!;
-            selectedClass.value = firstClass;
+            selectedClass.value = firstClass.id;
             await loadChartData(firstClass.id);
         }
     } catch (error) {
@@ -143,8 +149,8 @@ const loadClasses = async () => {
     }
 };
 
-onMounted(() => {
-    loadClasses();
+onMounted(async () => {
+    await Promise.all([loadClasses(), fetchThemeColor()]);
 });
 </script>
 
@@ -166,34 +172,8 @@ onMounted(() => {
     color: #1f2937;
 }
 
-.class-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-}
-
-.class-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 16px;
-    border: 2px solid #e5e7eb;
-    background: white;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    color: #6b7280;
-}
-
-.class-btn:hover {
-    border-color: #6366f1;
-    color: #6366f1;
-}
-
-.class-btn.active {
-    border-color: #6366f1;
-    background: #6366f1;
-    color: white;
+.class-selector {
+    max-width: 300px;
 }
 
 .stats-grid {
@@ -214,7 +194,7 @@ onMounted(() => {
 }
 
 .stat-icon {
-    background: #6366f1;
+    background: var(--ui-theme-color, #6366f1);
     color: white;
     width: 50px;
     height: 50px;

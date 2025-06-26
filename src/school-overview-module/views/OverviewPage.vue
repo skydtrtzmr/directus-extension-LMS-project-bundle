@@ -1,5 +1,5 @@
 <template>
-    <div class="overview-container">
+    <div class="overview-container" :style="themeColorCSSVars">
         <!-- 统计卡片区域 -->
         <div class="stats-grid" v-if="schoolData">
             <div class="stat-card">
@@ -93,8 +93,12 @@
 import { ref, onMounted } from 'vue';
 import ChartComponent from '../ChartComponent.vue';
 import { DataService } from '../services/dataService';
+import { useThemeColor } from '../composables/useThemeColor';
 
 const schoolData = ref<any>(null);
+
+// 使用系统主题色（只用于UI元素）
+const { themeColorCSSVars, fetchThemeColor } = useThemeColor();
 
 const loadSchoolData = async () => {
     try {
@@ -104,8 +108,8 @@ const loadSchoolData = async () => {
     }
 };
 
-onMounted(() => {
-    loadSchoolData();
+onMounted(async () => {
+    await Promise.all([loadSchoolData(), fetchThemeColor()]);
 });
 </script>
 
@@ -132,7 +136,7 @@ onMounted(() => {
 }
 
 .stat-icon {
-    background: #6366f1;
+    background: var(--ui-theme-color, #6366f1);
     color: white;
     width: 50px;
     height: 50px;

@@ -1,5 +1,5 @@
 <template>
-    <div class="exam-analysis-container">
+    <div class="exam-analysis-container" :style="themeColorCSSVars">
         <!-- 考试选择器 -->
         <div class="exam-selector-card">
             <h3>选择考试</h3>
@@ -109,10 +109,14 @@ import { ref, computed, onMounted, watch } from 'vue';
 import ChartComponent from '../ChartComponent.vue';
 import { DataService } from '../services/dataService';
 import type { Exam } from '../services/mockData';
+import { useThemeColor } from '../composables/useThemeColor';
 
 const exams = ref<Exam[]>([]);
 const selectedExam = ref<string>('');
 const chartData = ref<any>(null);
+
+// 使用系统主题色（只用于UI元素）
+const { themeColorCSSVars, fetchThemeColor } = useThemeColor();
 
 const currentExamData = computed(() => 
     exams.value.find(exam => exam.id === selectedExam.value) || null
@@ -145,8 +149,8 @@ const loadExams = async () => {
     }
 };
 
-onMounted(() => {
-    loadExams();
+onMounted(async () => {
+    await Promise.all([loadExams(), fetchThemeColor()]);
 });
 </script>
 
@@ -190,7 +194,7 @@ onMounted(() => {
 }
 
 .stat-icon {
-    background: #6366f1;
+    background: var(--ui-theme-color, #6366f1);
     color: white;
     width: 50px;
     height: 50px;

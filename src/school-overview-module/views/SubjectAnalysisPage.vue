@@ -1,5 +1,5 @@
 <template>
-    <div class="subject-analysis-container">
+    <div class="subject-analysis-container" :style="themeColorCSSVars">
         <!-- 学科选择器 -->
         <div class="subject-selector-card">
             <h3>选择学科</h3>
@@ -111,10 +111,14 @@ import { ref, onMounted } from 'vue';
 import ChartComponent from '../ChartComponent.vue';
 import { DataService } from '../services/dataService';
 import type { Subject } from '../services/mockData';
+import { useThemeColor } from '../composables/useThemeColor';
 
 const subjects = ref<Subject[]>([]);
 const selectedSubject = ref<Subject | null>(null);
 const chartData = ref<any>(null);
+
+// 使用系统主题色（只用于UI元素）
+const { themeColorCSSVars, fetchThemeColor } = useThemeColor();
 
 const selectSubject = async (subject: Subject) => {
     selectedSubject.value = subject;
@@ -143,8 +147,8 @@ const loadSubjects = async () => {
     }
 };
 
-onMounted(() => {
-    loadSubjects();
+onMounted(async () => {
+    await Promise.all([loadSubjects(), fetchThemeColor()]);
 });
 </script>
 
@@ -186,13 +190,13 @@ onMounted(() => {
 }
 
 .subject-btn:hover {
-    border-color: #6366f1;
-    color: #6366f1;
+    border-color: var(--ui-theme-color, #6366f1);
+    color: var(--ui-theme-color, #6366f1);
 }
 
 .subject-btn.active {
-    border-color: #6366f1;
-    background: #6366f1;
+    border-color: var(--ui-theme-color, #6366f1);
+    background: var(--ui-theme-color, #6366f1);
     color: white;
 }
 
@@ -214,7 +218,7 @@ onMounted(() => {
 }
 
 .stat-icon {
-    background: #6366f1;
+    background: var(--ui-theme-color, #6366f1);
     color: white;
     width: 50px;
     height: 50px;
