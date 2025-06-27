@@ -1,6 +1,6 @@
 import { defineHook } from '@directus/extensions-sdk';
 import IORedis from "ioredis";
-import { scanKeysByPattern } from '../utils/redisUtils';
+import { scanKeysByPattern, executeWithDistributedLock } from '../utils/redisUtils';
 import type {
 	HookExtensionContext,
 	RegisterFunctions,
@@ -37,6 +37,7 @@ redis.on('error', (err) => {
 });
 
 
+
 export default defineHook(
 	(
 		{ init, schedule, action, filter }: RegisterFunctions,
@@ -48,6 +49,13 @@ export default defineHook(
 		const CACHE_TTL_SECONDS = 3600 * 2; // 2 hours, adjust as needed
 		const PRACTICE_SESSION_COLLECTION = "practice_sessions";
 		const REVERSE_INDEX_PREFIX = "user_ps_index"; // Namespace for these keys
+
+		// 分布式锁的键名
+		const INIT_LOCK_KEY = `${REVERSE_INDEX_PREFIX}:init_lock`;
+		const SCHEDULE_LOCK_KEY = `${REVERSE_INDEX_PREFIX}:schedule_lock`;
+
+		// 环境变量控制是否启用初始化缓存预热（避免不必要的初始化）
+		const ENABLE_INIT_CACHE_WARMING = process.env.ENABLE_INIT_CACHE_WARMING !== 'false';
 
 		// 仅获取构建反向索引所必需的字段
 		const fieldsToFetch: string[] = [
@@ -181,18 +189,66 @@ export default defineHook(
 		// CRON: min hour day(month) month day(week)
 		const cronSchedule = process.env.USER_PS_CACHE_CRON_SCHEDULE || "*/30 * * * *";
 		schedule(cronSchedule, async () => {
-			logger.info(
-				`[${REVERSE_INDEX_PREFIX}] Scheduled user practice session cache refresh triggered by cron (${cronSchedule}).`
+			logger.info(`[${REVERSE_INDEX_PREFIX}] Cron job triggered (${cronSchedule}), attempting to acquire lock...`);
+			
+			// 使用分布式锁确保只有一个进程执行定时任务
+			const result = await executeWithDistributedLock(
+				redis,
+				SCHEDULE_LOCK_KEY,
+				async () => {
+					logger.info(
+						`[${REVERSE_INDEX_PREFIX}] Lock acquired successfully. Starting scheduled user practice session cache refresh...`
+					);
+					const startTime = Date.now();
+					await fetchAndCacheUserPracticeSessions();
+					const duration = Date.now() - startTime;
+					logger.info(`[${REVERSE_INDEX_PREFIX}] Scheduled cache refresh completed in ${duration}ms`);
+					return true;
+				},
+				300, // 5分钟锁定时间
+				logger
 			);
-			await fetchAndCacheUserPracticeSessions();
+
+			if (result === null) {
+				logger.info(`[${REVERSE_INDEX_PREFIX}] Scheduled task skipped - another process is already handling it.`);
+			} else if (result === true) {
+				logger.info(`[${REVERSE_INDEX_PREFIX}] Scheduled cache refresh completed successfully by this process.`);
+			}
 		});
 
 		// Run on application initialization (after app is ready)
 		init("app.after", async () => {
-			logger.info(
-				`[${REVERSE_INDEX_PREFIX}] Initial user practice session cache warming triggered.`
+			// 检查是否启用初始化缓存预热
+			if (!ENABLE_INIT_CACHE_WARMING) {
+				logger.info(`[${REVERSE_INDEX_PREFIX}] Initial cache warming is disabled by environment variable.`);
+				return;
+			}
+
+			logger.info(`[${REVERSE_INDEX_PREFIX}] Application initialized, attempting to acquire lock for cache warming...`);
+			
+			// 使用分布式锁确保只有一个进程执行初始化
+			const result = await executeWithDistributedLock(
+				redis,
+				INIT_LOCK_KEY,
+				async () => {
+					logger.info(
+						`[${REVERSE_INDEX_PREFIX}] Lock acquired successfully. Starting initial user practice session cache warming...`
+					);
+					const startTime = Date.now();
+					await fetchAndCacheUserPracticeSessions();
+					const duration = Date.now() - startTime;
+					logger.info(`[${REVERSE_INDEX_PREFIX}] Initial cache warming completed in ${duration}ms`);
+					return true;
+				},
+				300, // 5分钟锁定时间，足够初始化完成
+				logger
 			);
-			await fetchAndCacheUserPracticeSessions();
+
+			if (result === null) {
+				logger.info(`[${REVERSE_INDEX_PREFIX}] Initial cache warming skipped - another process is already handling it.`);
+			} else if (result === true) {
+				logger.info(`[${REVERSE_INDEX_PREFIX}] Initial cache warming completed successfully by this process.`);
+			}
 		});
 
 		// 增量更新单个用户的练习会话缓存

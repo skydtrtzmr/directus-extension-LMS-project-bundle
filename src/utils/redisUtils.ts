@@ -509,3 +509,89 @@ export async function deleteKeysByPattern(
         log.error(error, `[RedisUtils] Error while deleting keys with pattern "${pattern}"`);
     }
 }
+
+/**
+ * 获取分布式锁，用于在多进程环境下避免重复执行关键任务
+ * 
+ * @param redis Redis客户端实例
+ * @param lockKey 锁的键名
+ * @param ttlSeconds 锁的过期时间（秒），防止死锁
+ * @param logger 可选的日志记录器
+ * @returns 是否成功获取锁
+ */
+export async function acquireDistributedLock(
+    redis: Redis,
+    lockKey: string, 
+    ttlSeconds: number = 300, // 5分钟TTL
+    logger?: { info: (msg: string) => void; error: (err: any, msg?: string) => void }
+): Promise<boolean> {
+    const log = logger || { info: console.log, error: (e, m) => console.error(m, e) };
+    
+    try {
+        // 使用 SET 命令的 NX 和 EX 选项实现分布式锁
+        const lockValue = `${process.pid}-${Date.now()}-${Math.random()}`;
+        const result = await redis.set(lockKey, lockValue, 'EX', ttlSeconds, 'NX');
+        
+        if (result === 'OK') {
+            log.info(`[DistributedLock] Acquired lock: ${lockKey} (PID: ${process.pid})`);
+            return true;
+        } else {
+            log.info(`[DistributedLock] Failed to acquire lock: ${lockKey} (already held by another process)`);
+            return false;
+        }
+    } catch (error) {
+        log.error(error, `[DistributedLock] Error acquiring lock: ${lockKey}`);
+        return false;
+    }
+}
+
+/**
+ * 释放分布式锁
+ * 
+ * @param redis Redis客户端实例
+ * @param lockKey 锁的键名
+ * @param logger 可选的日志记录器
+ */
+export async function releaseDistributedLock(
+    redis: Redis,
+    lockKey: string, 
+    logger?: { info: (msg: string) => void; error: (err: any, msg?: string) => void }
+): Promise<void> {
+    const log = logger || { info: console.log, error: (e, m) => console.error(m, e) };
+    
+    try {
+        await redis.del(lockKey);
+        log.info(`[DistributedLock] Released lock: ${lockKey}`);
+    } catch (error) {
+        log.error(error, `[DistributedLock] Error releasing lock: ${lockKey}`);
+    }
+}
+
+/**
+ * 执行带分布式锁保护的函数，确保在多进程环境下只有一个进程执行
+ * 
+ * @param redis Redis客户端实例
+ * @param lockKey 锁的键名
+ * @param fn 要执行的异步函数
+ * @param ttlSeconds 锁的过期时间（秒）
+ * @param logger 可选的日志记录器
+ * @returns 函数执行结果，如果未获取到锁则返回null
+ */
+export async function executeWithDistributedLock<T>(
+    redis: Redis,
+    lockKey: string,
+    fn: () => Promise<T>,
+    ttlSeconds: number = 300,
+    logger?: { info: (msg: string) => void; error: (err: any, msg?: string) => void }
+): Promise<T | null> {
+    const lockAcquired = await acquireDistributedLock(redis, lockKey, ttlSeconds, logger);
+    if (!lockAcquired) {
+        return null;
+    }
+
+    try {
+        return await fn();
+    } finally {
+        await releaseDistributedLock(redis, lockKey, logger);
+    }
+}

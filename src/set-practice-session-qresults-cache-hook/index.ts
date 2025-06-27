@@ -1,7 +1,7 @@
 // set-practice-session-qresults-cache-hook/index.ts
 import { defineHook } from "@directus/extensions-sdk";
 import IORedis from "ioredis";
-import { cacheNestedObjectsToIndividualRedisHashes, scanKeysByPattern } from "../utils/redisUtils";
+import { cacheNestedObjectsToIndividualRedisHashes, scanKeysByPattern, executeWithDistributedLock } from "../utils/redisUtils";
 import type {
     HookExtensionContext,
     RegisterFunctions,
@@ -238,20 +238,45 @@ export default defineHook(
         // '*/1 * * * *' 表示每1分钟执行一次，对于全量刷新可能过于频繁，请谨慎设置
         // 注意这个是有过期时间的，所以如果你不全量更新的话，就一定会隔段时间没数据了。
         schedule("*/30 * * * *", async () => {
-            // Example: every 15 minutes
-            logger.info(
-                "Scheduled practice_session QResults cache refresh triggered."
+            // 使用分布式锁避免多进程重复执行
+            const result = await executeWithDistributedLock(
+                redis,
+                "practice_session_qresults:schedule_lock",
+                async () => {
+                    logger.info(
+                        "Scheduled practice_session QResults cache refresh triggered."
+                    );
+                    await fetchAndCachePracticeSessionResults();
+                },
+                300, // 5分钟锁定时间
+                logger
             );
-            await fetchAndCachePracticeSessionResults();
+
+            if (result === null) {
+                logger.info("Scheduled practice_session QResults cache refresh skipped (another process is handling it).");
+            }
         });
 
         // 应用初始化时预热缓存 (例如 'app.after' 表示 Directus 应用完全加载后)
         // 参考文档: https://docs.directus.io/guides/extensions/api-extensions/hooks.html#init-events
         init("app.after", async () => {
-            logger.info(
-                "Initial practice_session QResults cache warming triggered."
+            // 使用分布式锁避免多进程重复执行
+            const result = await executeWithDistributedLock(
+                redis,
+                "practice_session_qresults:init_lock",
+                async () => {
+                    logger.info(
+                        "Initial practice_session QResults cache warming triggered."
+                    );
+                    await fetchAndCachePracticeSessionResults();
+                },
+                300, // 5分钟锁定时间
+                logger
             );
-            await fetchAndCachePracticeSessionResults();
+
+            if (result === null) {
+                logger.info("Initial practice_session QResults cache warming skipped (another process is handling it).");
+            }
         });
 
         // 监听答题结果更新事件，精确更新对应的缓存哈希
