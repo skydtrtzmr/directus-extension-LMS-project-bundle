@@ -131,6 +131,8 @@ export default defineHook(
                         "question_results.submit_ans_select_radio",
                         "question_results.submit_ans_select_multiple_checkbox",
                         "question_results.is_flagged",
+                        "question_results.correct_ans_select_radio",
+                        "question_results.correct_ans_select_multiple_checkbox",
                         // Add any other question_result fields you need to cache
                     ],
                     limit: -1, // Fetch all sessions

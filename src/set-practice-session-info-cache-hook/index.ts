@@ -1,6 +1,6 @@
 import { defineHook } from '@directus/extensions-sdk';
 import IORedis from "ioredis";
-import { setFlattenedObjectToHash, deleteKeysByPattern } from "../utils/redisUtils";
+import { setFlattenedObjectToHash, deleteKeysByPattern, executeWithDistributedLock, testRedisConnection } from "../utils/redisUtils";
 import type {
 	HookExtensionContext,
 	RegisterFunctions,
@@ -24,6 +24,13 @@ export default defineHook(
 		const PRACTICE_SESSION_COLLECTION = "practice_sessions";
 		const CACHE_NAMESPACE = "practice_session_info";
 		const ID_FIELD = "id";
+
+		// 分布式锁的键名
+		const INIT_LOCK_KEY = `${CACHE_NAMESPACE}:init_lock`;
+		const SCHEDULE_LOCK_KEY = `${CACHE_NAMESPACE}:schedule_lock`;
+
+		// 环境变量控制是否启用初始化缓存预热（避免不必要的初始化）
+		const ENABLE_INIT_CACHE_WARMING = process.env.ENABLE_INIT_CACHE_WARMING !== 'false';
 
 		const fieldsToFetch = [
 			"id",
@@ -179,19 +186,72 @@ export default defineHook(
 
 		// 1. 全量更新缓存
 		// Schedule to run every 30 minutes
-		schedule("*/30 * * * *", async () => {
-			logger.info(
-				`[${CACHE_NAMESPACE}] Scheduled cache refresh triggered.`
+		const cronSchedule = process.env.PRACTICE_SESSION_INFO_CACHE_CRON_SCHEDULE || "*/30 * * * *";
+		schedule(cronSchedule, async () => {
+			logger.info(`[${CACHE_NAMESPACE}] Cron job triggered (${cronSchedule}), attempting to acquire lock...`);
+			
+			// 使用分布式锁确保只有一个进程执行定时任务
+			const result = await executeWithDistributedLock(
+				redis,
+				SCHEDULE_LOCK_KEY,
+				async () => {
+					logger.info(
+						`[${CACHE_NAMESPACE}] Lock acquired successfully. Starting scheduled practice session info cache refresh...`
+					);
+					const startTime = Date.now();
+					await fetchAndCachePracticeSessionInfo();
+					const duration = Date.now() - startTime;
+					logger.info(`[${CACHE_NAMESPACE}] Scheduled cache refresh completed in ${duration}ms`);
+					return true;
+				},
+				300, // 5分钟锁定时间
+				logger
 			);
-			await fetchAndCachePracticeSessionInfo();
+
+			if (result === null) {
+				logger.info(`[${CACHE_NAMESPACE}] Scheduled task skipped - another process is already handling it.`);
+			} else if (result === true) {
+				logger.info(`[${CACHE_NAMESPACE}] Scheduled cache refresh completed successfully by this process.`);
+			}
 		});
 
 		// Run on application initialization
 		init("app.after", async () => {
-			logger.info(
-				`[${CACHE_NAMESPACE}] Initial cache warming triggered.`
+			// 首先测试 Redis 连接
+			logger.info(`[${CACHE_NAMESPACE}] Testing Redis connection and distributed lock functionality...`);
+			await testRedisConnection(redis, logger);
+
+			// 检查是否启用初始化缓存预热
+			if (!ENABLE_INIT_CACHE_WARMING) {
+				logger.info(`[${CACHE_NAMESPACE}] Initial cache warming is disabled by environment variable.`);
+				return;
+			}
+
+			logger.info(`[${CACHE_NAMESPACE}] Application initialized, attempting to acquire lock for cache warming...`);
+			
+			// 使用分布式锁确保只有一个进程执行初始化
+			const result = await executeWithDistributedLock(
+				redis,
+				INIT_LOCK_KEY,
+				async () => {
+					logger.info(
+						`[${CACHE_NAMESPACE}] Lock acquired successfully. Starting initial practice session info cache warming...`
+					);
+					const startTime = Date.now();
+					await fetchAndCachePracticeSessionInfo();
+					const duration = Date.now() - startTime;
+					logger.info(`[${CACHE_NAMESPACE}] Initial cache warming completed in ${duration}ms`);
+					return true;
+				},
+				300, // 5分钟锁定时间，足够初始化完成
+				logger
 			);
-			await fetchAndCachePracticeSessionInfo();
+
+			if (result === null) {
+				logger.info(`[${CACHE_NAMESPACE}] Initial cache warming skipped - another process is already handling it.`);
+			} else if (result === true) {
+				logger.info(`[${CACHE_NAMESPACE}] Initial cache warming completed successfully by this process.`);
+			}
 		});
 
 		// 2. 增量更新缓存

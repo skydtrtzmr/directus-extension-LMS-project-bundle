@@ -422,7 +422,7 @@ export async function setFlattenedObjectToHash(
     }
 
     const hashKey = `${namespace}:${String(idValue)}`;
-    console.log(`[FlattenedCache] Hash key '${hashKey}': Starting to flatten and cache data.`);
+    // console.log(`[FlattenedCache] Hash key '${hashKey}': Starting to flatten and cache data.`);
 
     const flattenedData: Record<string, string> = flattenObjectRecursive(data);
 
@@ -438,7 +438,7 @@ export async function setFlattenedObjectToHash(
 
     try {
         await pipeline.exec();
-        console.log(`[FlattenedCache] Hash key '${hashKey}': Successfully cached ${Object.keys(flattenedData).length} flattened fields with TTL ${ttlSeconds}s.`);
+        // console.log(`[FlattenedCache] Hash key '${hashKey}': Successfully cached ${Object.keys(flattenedData).length} flattened fields with TTL ${ttlSeconds}s.`);
     } catch (error) {
         console.error(`[FlattenedCache] Hash key '${hashKey}': Error executing Redis pipeline. Error:`, error);
     }
@@ -460,7 +460,7 @@ export async function scanKeysByPattern(
     logger?: { info: (msg: string) => void; error: (err: any, msg?: string) => void }
 ): Promise<string[]> {
     const log = logger || { info: console.log, error: (e, m) => console.error(m, e) };
-    log.info(`[RedisUtils] Starting to scan keys matching pattern: ${pattern}`);
+    // log.info(`[RedisUtils] Starting to scan keys matching pattern: ${pattern}`);
     let cursor = '0';
     const allKeys: string[] = [];
     try {
@@ -471,7 +471,7 @@ export async function scanKeysByPattern(
                 allKeys.push(...keys);
             }
         } while (cursor !== '0');
-        log.info(`[RedisUtils] Finished scanning keys for pattern "${pattern}". Found ${allKeys.length} keys`);
+        // log.info(`[RedisUtils] Finished scanning keys for pattern "${pattern}". Found ${allKeys.length} keys`);
         return allKeys;
     } catch (error) {
         log.error(error, `[RedisUtils] Error while scanning keys with pattern "${pattern}"`);
@@ -511,6 +511,47 @@ export async function deleteKeysByPattern(
 }
 
 /**
+ * 测试Redis连接和分布式锁功能
+ * 
+ * @param redis Redis客户端实例
+ * @param logger 日志记录器
+ */
+export async function testRedisConnection(
+    redis: Redis,
+    logger?: { info: (msg: string) => void; error: (err: any, msg?: string) => void }
+): Promise<void> {
+    const log = logger || { info: console.log, error: (e, m) => console.error(m, e) };
+    
+    try {
+        // 测试基本连接
+        const pong = await redis.ping();
+        log.info(`[RedisTest] Ping response: ${pong}`);
+        
+        // 获取Redis连接信息
+        const redisHost = redis.options.host || 'unknown';
+        const redisPort = redis.options.port || 'unknown';
+        const redisDb = redis.options.db || 0;
+        
+        log.info(`[RedisTest] Connection details - Host: ${redisHost}, Port: ${redisPort}, DB: ${redisDb}, PID: ${process.pid}`);
+        
+        // 测试分布式锁
+        const testLockKey = `test_lock_${Date.now()}`;
+        const lockAcquired = await acquireDistributedLock(redis, testLockKey, 60, logger);
+        
+        if (lockAcquired) {
+            log.info(`[RedisTest] ✅ Test lock successfully acquired by PID ${process.pid}`);
+            await releaseDistributedLock(redis, testLockKey, logger);
+            log.info(`[RedisTest] ✅ Test lock successfully released by PID ${process.pid}`);
+        } else {
+            log.error(`[RedisTest] ❌ Failed to acquire test lock`);
+        }
+        
+    } catch (error) {
+        log.error(error, `[RedisTest] ❌ Redis connection test failed:`);
+    }
+}
+
+/**
  * 获取分布式锁，用于在多进程环境下避免重复执行关键任务
  * 
  * @param redis Redis客户端实例
@@ -528,19 +569,44 @@ export async function acquireDistributedLock(
     const log = logger || { info: console.log, error: (e, m) => console.error(m, e) };
     
     try {
+        // 检查Redis连接状态
+        const redisHost = redis.options.host || 'unknown';
+        const redisPort = redis.options.port || 'unknown';
+        const redisDb = redis.options.db || 0;
+        
+        log.info(`[DistributedLock] Redis connection info - Host: ${redisHost}, Port: ${redisPort}, DB: ${redisDb}, PID: ${process.pid}`);
+        
+        // 生成唯一的锁值，包含进程信息
+        const lockValue = `${process.pid}-${Date.now()}-${Math.random().toString(36).substring(2)}`;
+        
+        // 先检查锁是否已存在
+        const existingLock = await redis.get(lockKey);
+        if (existingLock) {
+            log.info(`[DistributedLock] Lock ${lockKey} already exists with value: ${existingLock} (attempting PID: ${process.pid})`);
+        }
+        
         // 使用 SET 命令的 NX 和 EX 选项实现分布式锁
-        const lockValue = `${process.pid}-${Date.now()}-${Math.random()}`;
+        log.info(`[DistributedLock] PID ${process.pid} attempting to acquire lock: ${lockKey} with value: ${lockValue}`);
         const result = await redis.set(lockKey, lockValue, 'EX', ttlSeconds, 'NX');
         
         if (result === 'OK') {
-            log.info(`[DistributedLock] Acquired lock: ${lockKey} (PID: ${process.pid})`);
-            return true;
+            // 再次验证锁确实被当前进程获取
+            const verifyLock = await redis.get(lockKey);
+            if (verifyLock === lockValue) {
+                log.info(`[DistributedLock] ✅ Successfully acquired lock: ${lockKey} (PID: ${process.pid}, Value: ${lockValue})`);
+                return true;
+            } else {
+                log.error(`[DistributedLock] ❌ Lock verification failed for ${lockKey}. Expected: ${lockValue}, Actual: ${verifyLock}`);
+                return false;
+            }
         } else {
-            log.info(`[DistributedLock] Failed to acquire lock: ${lockKey} (already held by another process)`);
+            // 获取当前锁的持有者信息
+            const currentHolder = await redis.get(lockKey);
+            log.info(`[DistributedLock] ❌ Failed to acquire lock: ${lockKey} (PID: ${process.pid}). Current holder: ${currentHolder}`);
             return false;
         }
     } catch (error) {
-        log.error(error, `[DistributedLock] Error acquiring lock: ${lockKey}`);
+        log.error(error, `[DistributedLock] ❌ Error acquiring lock: ${lockKey} (PID: ${process.pid})`);
         return false;
     }
 }
@@ -560,10 +626,18 @@ export async function releaseDistributedLock(
     const log = logger || { info: console.log, error: (e, m) => console.error(m, e) };
     
     try {
-        await redis.del(lockKey);
-        log.info(`[DistributedLock] Released lock: ${lockKey}`);
+        // 检查锁的当前状态
+        const currentLock = await redis.get(lockKey);
+        log.info(`[DistributedLock] PID ${process.pid} releasing lock: ${lockKey}. Current lock value: ${currentLock}`);
+        
+        const deleted = await redis.del(lockKey);
+        if (deleted > 0) {
+            log.info(`[DistributedLock] ✅ Successfully released lock: ${lockKey} (PID: ${process.pid})`);
+        } else {
+            log.info(`[DistributedLock] ⚠️ Lock ${lockKey} was not found when trying to release (PID: ${process.pid})`);
+        }
     } catch (error) {
-        log.error(error, `[DistributedLock] Error releasing lock: ${lockKey}`);
+        log.error(error, `[DistributedLock] ❌ Error releasing lock: ${lockKey} (PID: ${process.pid})`);
     }
 }
 
@@ -584,13 +658,27 @@ export async function executeWithDistributedLock<T>(
     ttlSeconds: number = 300,
     logger?: { info: (msg: string) => void; error: (err: any, msg?: string) => void }
 ): Promise<T | null> {
+    const log = logger || { info: console.log, error: (e, m) => console.error(m, e) };
+    
+    // 添加随机延迟，避免所有进程同时竞争锁
+    const randomDelay = Math.floor(Math.random() * 1000); // 0-1000ms随机延迟
+    log.info(`[DistributedLock] PID ${process.pid} waiting ${randomDelay}ms before attempting to acquire lock: ${lockKey}`);
+    await new Promise(resolve => setTimeout(resolve, randomDelay));
+    
     const lockAcquired = await acquireDistributedLock(redis, lockKey, ttlSeconds, logger);
     if (!lockAcquired) {
+        log.info(`[DistributedLock] PID ${process.pid} failed to acquire lock: ${lockKey}, skipping execution`);
         return null;
     }
 
     try {
-        return await fn();
+        log.info(`[DistributedLock] PID ${process.pid} executing protected function for lock: ${lockKey}`);
+        const result = await fn();
+        log.info(`[DistributedLock] PID ${process.pid} completed protected function for lock: ${lockKey}`);
+        return result;
+    } catch (error) {
+        log.error(error, `[DistributedLock] PID ${process.pid} error in protected function for lock: ${lockKey}`);
+        throw error;
     } finally {
         await releaseDistributedLock(redis, lockKey, logger);
     }
